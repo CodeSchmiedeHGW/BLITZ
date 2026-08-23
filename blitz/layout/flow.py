@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Optional
+import time
+from typing import Callable, Optional
 
 import numpy as np
 import pyqtgraph as pg
@@ -11,7 +12,7 @@ from PyQt6.QtCore import QRectF, QTimer
 from PyQt6.QtWidgets import QLabel
 
 from ..data.flow import accumulation_rgba, d8_accumulation
-from ..data.hillshade import VIEWPORT_MAX_EDGE, extract_viewport_patch
+from ..data.hillshade import extract_viewport_patch
 from .viewer import ImageViewer
 
 
@@ -26,10 +27,13 @@ class FlowAdapter:
         self,
         viewer: ImageViewer,
         status_label: Optional[QLabel] = None,
+        on_compute: Optional[Callable[[], None]] = None,
     ) -> None:
         self.viewer = viewer
         self._status = status_label
+        self._on_compute = on_compute
         self._preview = False
+        self.last_compute_s: Optional[float] = None
         self._log_scale = True
         self._overlay_rect: Optional[tuple[float, float, float, float]] = None
 
@@ -47,15 +51,24 @@ class FlowAdapter:
         self._timer.setSingleShot(True)
         self._timer.setInterval(80)
         self._timer.timeout.connect(self._refresh_now)
+        self._view_timer = QTimer(viewer)
+        self._view_timer.setSingleShot(True)
+        self._view_timer.setInterval(150)
+        self._view_timer.timeout.connect(self._refresh_now)
 
         viewer.timeLine.sigPositionChanged.connect(self._schedule)
         viewer.image_changed.connect(self._schedule)
         viewer.image_size_changed.connect(self._schedule)
         viewer.destroyed.connect(self._on_viewer_destroyed)
         try:
-            viewer.view.getViewBox().sigRangeChanged.connect(self._schedule)
+            self._vb = viewer.view.getViewBox()
         except Exception:
-            pass
+            self._vb = None
+
+    def _notify_compute(self) -> None:
+        cb = self._on_compute
+        if cb is not None:
+            cb()
 
     def set_preview(self, on: bool) -> None:
         self._preview = bool(on)
@@ -69,7 +82,10 @@ class FlowAdapter:
                     pass
             self._overlay_rect = None
             self._set_status("Flow off · analysis = height")
+            self._set_view_tracking(False)
+            self._notify_compute()
             return
+        self._set_view_tracking(True)
         self._schedule()
 
     def set_log_scale(self, on: bool) -> None:
@@ -81,13 +97,13 @@ class FlowAdapter:
             self._schedule()
 
     def _stop_timer(self) -> None:
-        timer = self._timer
-        if not _qobj_alive(timer):
-            return
-        try:
-            timer.stop()
-        except RuntimeError:
-            pass
+        for timer in (self._timer, getattr(self, "_view_timer", None)):
+            if not _qobj_alive(timer):
+                continue
+            try:
+                timer.stop()
+            except RuntimeError:
+                pass
 
     def _schedule(self, *_args) -> None:
         if not self._preview:
@@ -99,8 +115,34 @@ class FlowAdapter:
         except RuntimeError:
             return
 
+    def _set_view_tracking(self, on: bool) -> None:
+        vb = getattr(self, "_vb", None)
+        if vb is None:
+            return
+        try:
+            vb.sigRangeChanged.disconnect(self._schedule_view)
+        except (TypeError, RuntimeError):
+            pass
+        if on:
+            try:
+                vb.sigRangeChanged.connect(self._schedule_view)
+            except (TypeError, RuntimeError):
+                pass
+
+    def _schedule_view(self, *_args) -> None:
+        if not self._preview:
+            return
+        timer = getattr(self, "_view_timer", None)
+        if not _qobj_alive(timer):
+            return
+        try:
+            timer.start()
+        except RuntimeError:
+            return
+
     def _on_viewer_destroyed(self, *_args) -> None:
         self._preview = False
+        self._set_view_tracking(False)
         self._stop_timer()
 
     def _height_frame(self) -> Optional[np.ndarray]:
@@ -118,24 +160,21 @@ class FlowAdapter:
     def _view_window(
         self,
         frame: np.ndarray,
-    ) -> tuple[float, float, float, float, int, str]:
+    ) -> tuple[float, float, float, float, str]:
         order = str(getattr(self.viewer.imageItem, "axisOrder", "col-major"))
         spatial = np.asarray(frame).shape[:2]
         if order == "row-major":
             ny, nx = int(spatial[0]), int(spatial[1])
         else:
             nx, ny = int(spatial[0]), int(spatial[1])
-        max_edge = VIEWPORT_MAX_EDGE
         x0, x1, y0, y1 = 0.0, float(nx), 0.0, float(ny)
         try:
             vb = self.viewer.view.getViewBox()
             (vx0, vx1), (vy0, vy1) = vb.viewRange()
             x0, x1, y0, y1 = float(vx0), float(vx1), float(vy0), float(vy1)
-            px = max(int(vb.width()), int(vb.height()), 1)
-            max_edge = int(max(64, min(VIEWPORT_MAX_EDGE, px)))
         except Exception:
             pass
-        return x0, x1, y0, y1, max_edge, order
+        return x0, x1, y0, y1, order
 
     def _viewport_patch(
         self,
@@ -143,7 +182,7 @@ class FlowAdapter:
         frame = self._height_frame()
         if frame is None:
             return None
-        x0, x1, y0, y1, max_edge, order = self._view_window(frame)
+        x0, x1, y0, y1, order = self._view_window(frame)
         return extract_viewport_patch(
             frame,
             x0,
@@ -151,7 +190,6 @@ class FlowAdapter:
             y0,
             y1,
             axis_order=order,
-            max_edge=max_edge,
         )
 
     def _refresh_now(self) -> None:
@@ -166,21 +204,30 @@ class FlowAdapter:
             return
         patch, rect = spec
         self._overlay_rect = rect
+        t0 = time.perf_counter()
         try:
             acc = d8_accumulation(patch)
             rgba = accumulation_rgba(acc, log_scale=self._log_scale)
         except Exception as e:
+            self.last_compute_s = None
             self._item.setVisible(False)
             self._set_status(f"Flow failed: {e}")
+            self._notify_compute()
             return
+        self.last_compute_s = time.perf_counter() - t0
+        self._notify_compute()
+        self._patch_hw = (int(acc.shape[0]), int(acc.shape[1]))
         self._item.setImage(rgba, autoLevels=False)
         rx, ry, rw, rh = rect
         self._item.setRect(QRectF(rx, ry, rw, rh))
         self._item.setVisible(True)
         scale = "log1p" if self._log_scale else "linear"
         h, w = int(acc.shape[0]), int(acc.shape[1])
+        ms = 1000.0 * self.last_compute_s
+        fps = (1.0 / self.last_compute_s) if self.last_compute_s > 1e-9 else 0.0
         self._set_status(
-            f"D8 accumulation {scale} · {h}×{w} viewport · analysis = height"
+            f"D8 accumulation {scale} · {h}×{w} viewport · "
+            f"{ms:.1f} ms ({fps:.0f} fps) · analysis = height"
         )
 
     def _set_status(self, text: str) -> None:

@@ -36,7 +36,7 @@ Source-backed inventory of BLITZ analysis, visualization, and data-processing ca
 | **Image Viewer** | Main matrix view (`ImageViewer`) |
 | **H Plot** / **V Plot** | Crosshair line profiles (horizontal / vertical) |
 | **Probe** | Frames count, cursor position, value + swatch (RGB = pixel, gray = LUT) |
-| **LUT** | Histogram LUT, levels, colormap, Fit / Trim, IDLE + Bench compact |
+| **LUT** | Histogram LUT, levels, colormap, Fit / Trim, IDLE + always-on UI-lag HUD |
 | **Options** | Tabbed control panel (File → Log). Tabs **wrap onto extra rows** so later pages (Stream, Log) stay visible instead of hiding off to the right. |
 | **Timeline** | ROI time series + Frame \| Range side panel |
 | **Polyline** | Path-intensity profile (starts hidden; Tools → Show) |
@@ -169,17 +169,15 @@ stack** — that would bake `0…1` shade into `ImageData`. See the
 | **Preset** | Four lights 90° apart | Same elevation (not overhead), distinct colours; resets independent positions |
 | **Elevation** | Sun height `0–90°` | Horizon → zenith; also by dragging a sun radially; locked while Pre-cache is on |
 | **Z factor** | Vertical exaggeration `0.01–2` | Default `1`. With U16 centimetre height, `0–1` is the useful range (20× was for unitless 8-bit). Shadow on the dome. Locked while Pre-cache is on |
-| **Pre-cache azimuth** | Freeze elev/Z; background azimuth atlas | Worker on the **viewport** patch; uint8 overlay swap |
+| **Pre-cache azimuth** | Freeze elev/Z; background azimuth atlas | Worker on the **full frame**; uint8 overlay swap |
 | **Step** | Atlas raster `5–90°` (default 30°) | Finest is 5° (72 frames). 1° is not offered. Must divide 360°. |
-| **RAM line** | Atlas / peak / free RAM | Sized from the viewport patch, not the full frame |
-| **Flow → Preview accumulation** | D8 drainage overlay | Each cell → steepest of 8 neighbours; gold–cyan veins (not a filled slab). Viewport paint; sits on LUT or Shade. Analysis = height |
+| **RAM line** | Atlas / peak / free RAM hint | 1 Hz while Preview/Pre-cache is on; sized from **full frame**. Hard check when enabling Pre-cache |
+| **Flow → Preview accumulation** | D8 drainage overlay | Each cell → steepest of 8 neighbours; gold–cyan veins. Still **viewport** crop; sits on LUT or Shade. Analysis = height |
 | **Flow → Log scale** | `log1p` colour stretch | Default on so channels show instead of one sink |
 
-**Math (`calculate_hillshade`):** height from grayscale or luminance `0.299R+0.587G+0.114B` → `dx, dy = ∇z` → unit normal · light vector → shade clipped to `[0, 1]`. Overlay paint uses the **visible ViewBox** (crop + halo, downsampled to ~screen size) and `ImageItem.setRect` to align. **Combined** averages coloured lights (RGB overlay). **Pre-cache** atlases that viewport patch for the current `T`. A cache over all `T` at one angle is still later.
+**Math (`calculate_hillshade`):** height from grayscale or luminance `0.299R+0.587G+0.114B` → `dx, dy = ∇z` → unit normal · light vector → shade clipped to `[0, 1]`. Shade Preview paints the **full frame** once; pan/zoom only transforms the overlay (same ViewBox as the cube). **Combined** averages coloured lights (RGB overlay). **Pre-cache** atlases that full frame for the current `T`. A cache over all `T` at one angle is still later.
 
-**Math (`d8_accumulation`):** same viewport height patch → steepest-descent among 8 neighbours (drop / distance; diagonals `√2`) → accumulate cell counts high-to-low. Pits/flats are sinks. Overlay is RGBA (not a cube). Not a palaeo reconstruction: buildings in the DEM steer flow.
-
-**Math (`calculate_hillshade`):** height from grayscale or luminance `0.299R+0.587G+0.114B` → `dx, dy = ∇z` → unit normal · light vector → shade clipped to `[0, 1]`. Overlay paint uses the **visible ViewBox** (crop + halo, downsampled to ~screen size) and `ImageItem.setRect` to align. **Combined** averages coloured lights (RGB overlay). **Pre-cache** atlases that viewport patch for the current `T`. A cache over all `T` at one angle is still later.
+**Math (`d8_accumulation`):** same viewport height patch at source resolution → steepest-descent among 8 neighbours (drop / distance; diagonals `√2`) → accumulate cell counts high-to-low. Pits/flats are sinks. Overlay is RGBA (not a cube). Not a palaeo reconstruction: buildings in the DEM steer flow.
 
 ```mermaid
 flowchart TD
@@ -190,7 +188,7 @@ flowchart TD
   el --> lights
   lights --> rgb["Mean of n·l tinted by each colour"]
   zf --> grad["∇(z · Z) then shade"]
-  rgb --> overlay["Viewport overlay"]
+  rgb --> overlay["Full-frame overlay"]
   grad --> overlay
 ```
 
@@ -203,7 +201,7 @@ flowchart TD
   hit -->|yes| swap["setImage from atlas"]
   hit -->|no| wait["Keep last overlay; status Caching"]
   worker --> done["All 12 ready"]
-  uncheck["Uncheck Pre-cache"] --> live["Live 80 ms recompute"]
+  uncheck["Uncheck Pre-cache"] --> live["Live full-frame recompute"]
 ```
 
 ```mermaid
@@ -242,12 +240,18 @@ Requires `T ≥ 2` and non-aggregate view. Approximate defaults: `n_oversamples=
 
 | Control | What it shows |
 |---------|---------------|
-| **Show CPU load** | Sparkline under LUT IDLE |
+| **CPU / RAM / Disk sparklines** | System load while this tab is open (~0.5 s) |
 | **Raw / Result matrix** | Buffer shapes / presence |
 | **View mode** | Current display mode |
 | **Result cache** | Ops/reduce cache status |
 | **Numba** | JIT active / fallback |
+| **CPU** | System **avg** and **busiest core** (N cores). Overlay math is 1-thread |
+| **Overlay** | Last Shade/Flow compute: ms and theoretical `1/dt` at the current crop (not UI lag) |
 | **Live** | Live-stream indicator |
+
+The LUT corner under IDLE shows **UI lag** (`UI N ms` + 30 s ampel amp,
+Y 0–300 ms), always on — event-loop responsiveness, not paint FPS and not
+these Bench sparklines.
 
 ---
 
@@ -436,7 +440,7 @@ Status visible in **Bench → Numba**.
 | Measure | Tools | Area, circularity, bbox | AU calibration |
 | Polyline profile | Tools + Polyline dock | Path sample + ⊥ band stats | CSV |
 | RoSEE | RoSEE | Cumsum fluctuation extrema | — |
-| Hillshade | Shade | Lambertian `n·l` from `∇z` | Preview overlay; viewport paint; sky dome; Combined coloured lights |
+| Hillshade | Shade | Lambertian `n·l` from `∇z` | Preview overlay; **full frame**; sky dome; Combined coloured lights |
 | D8 accumulation | Shade → Flow | Steepest-descent 8-neighbour drain | Preview cyan overlay; viewport; log1p default |
 | PCA / SVD | PCA | Exact or randomized SVD | — |
 | LUT levels | LUT dock | Percentile / min-max | (LUT export hidden) |

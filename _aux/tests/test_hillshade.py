@@ -222,16 +222,53 @@ def test_viewport_slices_col_major_includes_halo() -> None:
     assert rect == (9.0, 4.0, 12.0, 12.0)
     z = np.arange(100 * 80).reshape(100, 80)
     patch, prect = extract_viewport_patch(
-        z, 10, 20, 5, 15, axis_order="col-major", max_edge=1600, halo=1
+        z, 10, 20, 5, 15, axis_order="col-major", halo=1
     )
     assert patch.shape == (12, 12)
     assert prect == rect
 
 
-def test_downsample_xy_caps_long_edge() -> None:
-    from blitz.data.hillshade import downsample_xy
+def test_extract_keeps_one_pixel_stripes_beyond_1600() -> None:
+    """1-px bars must reach ∇z. A 1600-cap stride-2 would keep only even x (flat)."""
+    from blitz.data.flow import d8_accumulation
+    from blitz.data.hillshade import calculate_hillshade, extract_viewport_patch
 
-    z = np.zeros((4000, 500), dtype=np.float32)
-    d = downsample_xy(z, 1000)
-    assert max(d.shape) <= 1000
-    assert d.shape[0] == 1000
+    nx, ny = 2000, 48
+    z = np.zeros((nx, ny), dtype=np.float64)
+    z[1::2, :] = 10.0
+    patch, _rect = extract_viewport_patch(
+        z, 0, nx, 0, ny, axis_order="col-major", halo=0
+    )
+    assert patch.shape == (nx, ny)
+    shade = calculate_hillshade(patch, azimuth_deg=270.0, elevation_deg=45.0)
+    assert shade.shape == patch.shape
+    # A 1600-cap stride-2 would keep only even x → all zeros → flat shade.
+    decimated = z[::2, ::2]
+    flat = calculate_hillshade(decimated, azimuth_deg=270.0, elevation_deg=45.0)
+    assert float(np.ptp(flat)) < 1e-6
+    assert float(np.ptp(shade)) > float(np.ptp(flat))
+    acc = d8_accumulation(patch)
+    assert acc.shape == patch.shape
+    assert float(np.max(acc)) > 1.0
+
+
+def test_extract_keeps_4k_viewport_uncapped() -> None:
+    from blitz.data.hillshade import extract_viewport_patch
+
+    z = np.arange(5000 * 4000, dtype=np.float32).reshape(5000, 4000)
+    patch, rect = extract_viewport_patch(
+        z, 0, 2000, 0, 1800, axis_order="col-major", halo=0
+    )
+    assert patch.shape == (2000, 1800)
+    assert rect[2] == 2000.0 and rect[3] == 1800.0
+    assert max(patch.shape) > 1600
+
+
+def test_physical_display_px_uses_device_pixel_ratio() -> None:
+    from blitz.data.hillshade import physical_display_px
+
+    # 900 logical CSS px at 2× is 1800 physical — not a 1600 working copy.
+    assert physical_display_px(900, 2.0) == 1800
+    assert physical_display_px(800, 1.0) == 800
+    native_w = physical_display_px(900, 2.0)
+    assert native_w > 1600

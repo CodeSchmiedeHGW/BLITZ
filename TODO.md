@@ -9,8 +9,45 @@ Related: [`docs/missing_features.md`](docs/missing_features.md) (hidden UI / con
 
 ---
 
+## Parked 2026-08-22 — core viewer first
+
+Stop here. Next session: taste-test pan/zoom on the **Load data** splash and a
+large file, Preview **off**. Do not add Shade/Flow work until the core viewer
+feels right.
+
+**Rule:** BLITZ is a fast viewer. Shade/Flow are optional overlays. When
+Preview is off they must not sit on pan/zoom/load.
+
+**What we learned**
+- Overlay `1/dt` is not display FPS / UI lag. Paint-FPS on the viewer paint
+  path stays off the table; LUT HUD uses event-loop lag instead (always on).
+- In-core File-tab test patterns: **removed** (sidecar streamer later, not a
+  third in-core generator).
+- Shade leaked onto pan via always-on `sigRangeChanged` + RAM/`psutil` +
+  stylesheet. Partly peeled; not fully inert when off (extra ImageItems;
+  timeline/`image_changed` slots still fire and return).
+- Pixel-identity (no 1600-px working copy) stays. **Shade** is full-frame
+  (recompute on az/elev/Z/frame only). **Flow** still viewport — same lag
+  tradeoff until we decide.
+- Immediate `autoDownsample` made the splash pan badly — do **not** turn it
+  on raw. Display downsample is **debounced** (~80 ms after ViewBox settle).
+  Shade Preview must not hide the cube.
+
+**Dirty tree (uncommitted, mixed):** pixel-identity tests/docs, Shade/Flow
+debounce + RAM 1 Hz + range hook only while Preview on, pattern files gone,
+UI-lag HUD.
+
+**Not built:** sidecar streamer, SpatialMetaData, 20k DGM bench, GPU.
+
+**Resume:** (1) restart, splash pan, then large file Preview off (2) if still
+wrong, isolate Shade/Flow completely when off (3) autoDownsample only if needed.
+
+---
+
 ## Recently done (this stretch)
 
+- **UI lag HUD** under LUT IDLE (event-loop probe + amp); CPU/RAM stay Bench-only.
+- **Parked core-viewer taste test** — see above (2026-08-22).
 - **v2.1.1** Close-safe Shade/Flow timers; RGB cursor swatch (gray stays LUT);
   load-dialog **Auto-crop**; Timeline dock comes back when a stream grows past T=1.
 - **v2.1.0** Shade sky dome (azimuth / elevation / Z, Combined colours,
@@ -60,7 +97,7 @@ Related: [`docs/missing_features.md`](docs/missing_features.md) (hidden UI / con
 
 ## P0 — Before the next push
 
-_(none open)_
+Taste-test pan/zoom after today’s cleanup. Shade/Flow stay off the core path.
 
 ---
 
@@ -72,6 +109,15 @@ Native crash (`SIGSEGV`), no Python traceback. Repro: Connect to dead host → o
 **Log**. Cause: worker-thread `log()` into `QTextEdit`. Mitigation in
 `blitz/tools.py` (queued marshal) — **re-test**; see `BUGS.md` +
 `docs/agent_handoff_sigsegv_log.md`.
+
+### SpatialMetaData + File-tab / world cursor (after pixel-identity)
+
+Optional `MetaData.spatial` sidecar only — do **not** dump GIS fields onto
+`MetaData`. Cube stays `.npy`. Display in the existing File metadata block
+when present (CRS, origin, resolution, NoData). Then Probe: Pixel X/Y plus
+World E/N via affine / GeoTransform. Socket payload may carry `spatial`
+next to `file_name` / `index`. After that: 20k×20k DGM bench (honest full-res
+shade, not a 1600-px stand-in).
 
 ---
 
@@ -93,6 +139,13 @@ Relevant: `blitz/layout/rosee.py`, `blitz/layout/isoline.py`.
 ### Image smoothing
 
 General Ops/display spatial blur (today only RoSEE/isolines/TOF). Gaussian/box/temporal — see `docs/numba_candidates.md`. **Not a Shade-tab control** — belongs in Ops/View when implemented; Shade stays lighting-only.
+
+### Sidecar streamer for test rasters
+
+Stripes / checkerboard for pixel-identity Shade/Flow checks belong in a
+**suite sidecar streamer** (`.npy` + optional spatial JSON), same path as
+`dgm-mosaic` / WOLKE — **not** a third in-core generator. Conway + Synthetic
+Live stay. Do not add File-tab pattern buttons in BLITZ.
 
 ---
 
@@ -186,6 +239,37 @@ Checkbox / volume view — unscoped.
 
 Likely BUSY/UI overhead; profile.
 
+### Performance Tweaks?
+
+Suspects that can push the UI-lag amp into yellow/red (event-loop blocked).
+Use the LUT HUD while tasting; fix only what the amp + feel confirm.
+
+- **Shade/Flow inert when Preview off** — `image_changed` / timeline slots still
+  fire and early-return; extra overlay `ImageItem`s stay in the scene. Fully
+  disconnect + hide/remove items when off so pan/zoom is cube-only.
+- **Shade/Flow Preview cost** — pixel-identity full-res ∇z/D8 on the visible
+  crop; large zoomed-out viewports are expensive by design. Tune debounce
+  (~150 ms view), crop halo, or optional atlas/T-cache — do not silently
+  downscale analysis matrices.
+- **Display downsample settle** — debounced rebuild (~80 ms) after ViewBox
+  settle (`display_downsample.py`). If zoom-out still hitchs, profile settle
+  vs QImage rebuild; never re-enable *immediate* `autoDownsample`.
+- **H/V extraction + polyline** — line-drag and frame scrub redraw plots
+  (throttle exists ~30 fps). Heavy stacks / envelopes may still stall the
+  GUI thread; gate harder or sample fewer points while dragging.
+- **Isolines / RoSEE / linked cursor** — timeline and `image_changed` fans;
+  confirm throttles when overlays are hidden.
+- **Histogram / LUT path** — `setImage` / `updateImage` / Fit can recompute
+  hist on large frames; watch amp on load and Auto-fit.
+- **Live / webcam apply** — display throttle (camera ~10 fps) vs ring push;
+  high FPS synthetic live can still flood `setImage` if throttle slips.
+- **Mean / reduce “BUSY” tax** — small cubes feel slow from UI/BUSY wrapping
+  more than NumPy (see item above); profile before micro-optimizing kernels.
+- **pyqtgraph / paint path** — optional OpenGL, ImageItem path; measure before
+  flipping globals (regressions on some drivers).
+- **Do not chase** — UI-lag 250 ms probe itself; Bench `psutil` while Bench tab
+  closed; paint-FPS on the viewer hot path.
+
 ### Shade: keep Preview, never Apply-replace
 
 Hillshade stays. **Do not** add Apply → replace stack (would store lighting as
@@ -194,11 +278,11 @@ Blend / real-sun / GeoTIFF remain parked. Arrival Map / optical-flow overlays
 and a generic Overlay tab are **not** planned.
 
 Optional later (optimization only): cache shade for the current az/elev/Z over
-`T` so timeline scrub stays smooth. The azimuth atlas (viewport of the current frame, step 5–90°) is implemented
-as Shade **Pre-cache**. Overlay paint is viewport-local (crop + downsample).
-Combined coloured lights live on the sky dome (independent drag + colour + Preset).
-**Flow → Preview accumulation** (D8, viewport, gold–cyan veins) is implemented on
-the Shade tab. Seed path / fill-to-level / legend stay parked. Not palaeo reconstruction.
+`T` so timeline scrub stays smooth. The azimuth atlas (**full frame**, step
+5–90°) is Shade **Pre-cache**. Shade Preview is full-frame paint; pan/zoom is
+ViewBox only. Combined coloured lights live on the sky dome.
+**Flow → Preview accumulation** (D8, still viewport, gold–cyan veins) is on
+the Shade tab. Seed path / fill-to-level / legend stay parked.
 
 ### TOF → auxiliary curve
 

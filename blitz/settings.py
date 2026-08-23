@@ -50,8 +50,6 @@ _default_core_settings = {
 
     "app/restart_exit_code": -12341234,
     "app/theme": "dark",
-
-    "bench/show_stats": True,
 }
 
 # Opaque settings: stored/retrieved without type coercion (e.g. dock state from pyqtgraph)

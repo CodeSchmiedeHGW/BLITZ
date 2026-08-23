@@ -30,8 +30,8 @@ from ..data.folder_scan import (
     should_show_chooser,
 )
 from ..tools import (LoadingManager, format_pixel_value_fixed, format_size_mb,
-                     get_available_ram, get_cpu_percent, get_disk_io_mbs,
-                     get_used_ram, log, pixel_to_swatch_rgb8)
+                     get_available_ram, get_cpu_percent, get_cpu_percore,
+                     get_disk_io_mbs, get_used_ram, log, pixel_to_swatch_rgb8)
 
 
 def _pca_sync_vb2(plot_widget) -> None:
@@ -83,6 +83,7 @@ from .rosee import ROSEEAdapter
 from ..data.hillshade import clamp_azimuth_cache_step, snap_azimuth_deg
 from .shade import ShadeAdapter
 from .flow import FlowAdapter
+from .responsiveness import ResponsivenessMeter
 from .conway_life import ConwayLifeWidget
 from .simulated_live import SimulatedLiveWidget
 from .tof import TOFAdapter
@@ -135,10 +136,12 @@ class MainWindow(QMainWindow):
             status_label=self.ui.label_shade_status,
             ram_label=self.ui.label_shade_cache_ram,
             on_precache_off=self._sync_shade_precache_ui_off,
+            on_compute=self._update_bench_overlay,
         )
         self.flow_adapter = FlowAdapter(
             self.ui.image_viewer,
             status_label=self.ui.label_flow_status,
+            on_compute=self._update_bench_overlay,
         )
         self._linked_cursor = LinkedCursorController(
             self.ui.image_viewer,
@@ -652,13 +655,14 @@ class MainWindow(QMainWindow):
         self.ui.image_viewer.image_size_changed.connect(self.update_bench)
         self._bench_timer = QTimer(self)
         self._bench_timer.timeout.connect(self._bench_tick)
-        self.ui.checkbox_bench_show_stats.stateChanged.connect(
-            self._on_bench_show_stats_changed
-        )
-        self._on_bench_show_stats_changed()  # Apply initial state
+        self._ui_lag_meter = ResponsivenessMeter(interval_s=0.25)
+        self._ui_lag_timer = QTimer(self)
+        self._ui_lag_timer.timeout.connect(self._ui_lag_tick)
+        self._ui_lag_timer.start(250)
         self.ui.option_tabwidget.currentChanged.connect(
             self._on_option_tab_changed
         )
+        self._update_bench_timer()
         self._update_envelope_options()
         self._update_selection_visibility()
         self.update_bench()
@@ -1787,23 +1791,24 @@ class MainWindow(QMainWindow):
         self._update_position_display()
         self._update_meta_display()
 
-    def _on_bench_show_stats_changed(self) -> None:
-        """Show/hide CPU load in LUT panel. Timer runs for Bench tab or compact."""
-        on = self.ui.checkbox_bench_show_stats.isChecked()
-        settings.set("bench/show_stats", on)
-        self.ui.bench_compact.setVisible(on)
-        self._update_bench_timer()
-
     def _update_bench_timer(self) -> None:
-        """Start timer when Bench tab visible or compact enabled; else stop."""
+        """Start CPU/RAM/Disk sampler only while the Bench tab is visible."""
         bench_idx = getattr(self.ui, "bench_tab_index", self.ui.option_tabwidget.count() - 1)
-        bench_tab_visible = self.ui.option_tabwidget.currentIndex() == bench_idx
-        compact_enabled = self.ui.checkbox_bench_show_stats.isChecked()
-        if bench_tab_visible or compact_enabled:
+        if self.ui.option_tabwidget.currentIndex() == bench_idx:
             self._bench_timer.start(500)
         else:
             self._bench_timer.stop()
             self.ui.label_bench_live.setText("")
+
+    def _ui_lag_tick(self) -> None:
+        """Probe event-loop lag; refresh LUT responsiveness HUD."""
+        self._ui_lag_meter.note_tick()
+        samples = self._ui_lag_meter.samples()
+        if not samples:
+            self.ui.bench_compact.set_ui_lag(None, [])
+            return
+        lag = self._ui_lag_meter.lag_ms()
+        self.ui.bench_compact.set_ui_lag(lag, samples)
 
     def _sync_pca_target_comp_to_data(self) -> None:
         """Update Target Comp max and default from current data (e.g. when PCA tab is shown)."""
@@ -1843,12 +1848,23 @@ class MainWindow(QMainWindow):
         """Sample CPU/RAM/Disk, feed shared BenchData, refresh Bench tab + compact (if shown)."""
         ram_free = get_available_ram()
         ram_used = get_used_ram()
-        cpu = get_cpu_percent()
+        per = get_cpu_percore()
+        if per:
+            cpu = sum(per) / len(per)
+            busy = max(per)
+            n_cores = len(per)
+        else:
+            cpu = get_cpu_percent()
+            busy = cpu
+            n_cores = 1
         disk_r, disk_w = get_disk_io_mbs()
         self.ui.bench_data.add(cpu, ram_used, ram_free, disk_r, disk_w)
+        self.ui.label_bench_cpu.setText(
+            f"CPU {cpu:.0f}% avg · busiest core {busy:.0f}% "
+            f"({n_cores} cores) · Shade/Flow are 1-thread NumPy"
+        )
+        self._update_bench_overlay()
         self.ui.bench_sparklines.refresh_from_data()
-        if self.ui.checkbox_bench_show_stats.isChecked():
-            self.ui.bench_compact.refresh()
         bench_idx = getattr(self.ui, "bench_tab_index", self.ui.option_tabwidget.count() - 1)
         if self.ui.option_tabwidget.currentIndex() == bench_idx:
             tick = getattr(self, "_bench_live_tick", 0)
@@ -1864,6 +1880,7 @@ class MainWindow(QMainWindow):
             self.ui.label_bench_mode.setText("View mode: —")
             self.ui.label_bench_cache.setText("Cache: —")
             self.ui.label_bench_numba.setText("Numba: —")
+            self.ui.label_bench_overlay.setText("Overlay: —")
             return
         shape = data._image.shape
         dtype = data._image.dtype.name
@@ -1906,6 +1923,30 @@ class MainWindow(QMainWindow):
             self.ui.label_bench_numba.setText("Numba: on" if on else "Numba: off")
         else:
             self.ui.label_bench_numba.setText("Numba: unavailable")
+        self._update_bench_overlay()
+
+    def _update_bench_overlay(self) -> None:
+        """Last Shade/Flow compute as ms and 1/dt (Bench tab only)."""
+        parts: list[str] = []
+        for name, adapter in (
+            ("Shade", getattr(self, "shade_adapter", None)),
+            ("Flow", getattr(self, "flow_adapter", None)),
+        ):
+            if adapter is None or not getattr(adapter, "_preview", False):
+                continue
+            dt = getattr(adapter, "last_compute_s", None)
+            if dt is None or dt <= 0:
+                parts.append(f"{name} —")
+                continue
+            fps = 1.0 / dt
+            hw = getattr(adapter, "_frame_hw", None) or getattr(
+                adapter, "_patch_hw", None
+            )
+            size = f" · {hw[0]}×{hw[1]}" if hw else ""
+            parts.append(f"{name} {1000.0 * dt:.1f} ms ({fps:.0f} fps){size}")
+        self.ui.label_bench_overlay.setText(
+            "Overlay: " + (" · ".join(parts) if parts else "off")
+        )
 
     def _apply_native_format_checkboxes(
         self,

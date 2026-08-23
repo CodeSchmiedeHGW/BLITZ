@@ -450,8 +450,7 @@ class UI_MainWindow(QWidget):
         self.blocking_status.setStyleSheet(get_style("idle"))
         self.blocking_status.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.bench_data = BenchData()
-        self.bench_compact = BenchCompact(self.bench_data)
-        self.bench_compact.setToolTip("CPU load (last ~30 s). Enable in Bench tab.")
+        self.bench_compact = BenchCompact()
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
@@ -1359,16 +1358,6 @@ class UI_MainWindow(QWidget):
         bench_label.setStyleSheet(get_style("heading"))
         bench_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         bench_layout.addWidget(bench_label)
-        self.checkbox_bench_show_stats = QCheckBox(
-            "Show CPU load below"
-        )
-        self.checkbox_bench_show_stats.setChecked(
-            bool(settings.get("bench/show_stats"))
-        )
-        self.checkbox_bench_show_stats.setToolTip(
-            "CPU sparkline in LUT panel below IDLE."
-        )
-        bench_layout.addWidget(self.checkbox_bench_show_stats)
         self.bench_sparklines = BenchSparklines(self.bench_data)
         bench_layout.addWidget(self.bench_sparklines, 0, Qt.AlignmentFlag.AlignTop)
         self.label_bench_raw = QLabel("Raw matrix: —")
@@ -1381,6 +1370,12 @@ class UI_MainWindow(QWidget):
         bench_layout.addWidget(self.label_bench_cache)
         self.label_bench_numba = QLabel("Numba: —")
         bench_layout.addWidget(self.label_bench_numba)
+        self.label_bench_cpu = QLabel("CPU: —")
+        self.label_bench_cpu.setWordWrap(True)
+        bench_layout.addWidget(self.label_bench_cpu)
+        self.label_bench_overlay = QLabel("Overlay: —")
+        self.label_bench_overlay.setWordWrap(True)
+        bench_layout.addWidget(self.label_bench_overlay)
         self.label_bench_live = QLabel("")
         self.label_bench_live.setStyleSheet(
             "color: #9ece6a; font-weight: bold;"

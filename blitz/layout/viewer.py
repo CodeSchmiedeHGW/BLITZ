@@ -15,6 +15,7 @@ from ..theme import get_viewer_bg, get_timeline_curve_color, get_timeline_curve_
 from ..data.ops import ReduceOperation
 from ..lut_levels import calculate_lut_levels
 from ..tools import fit_text, format_pixel_value, log
+from .display_downsample import install_debounced_auto_downsample
 
 
 class ImageViewer(pg.ImageView):
@@ -52,6 +53,8 @@ class ImageViewer(pg.ImageView):
         self.poly_roi_state = self.poly_roi.getState()
         self.square_roi_state = self.square_roi.getState()
         self.ui.graphicsView.setBackground(pg.mkBrush(*get_viewer_bg()))
+        # Paint only. Analysis (probe / Shade / Flow) still reads ImageData.
+        install_debounced_auto_downsample(self.imageItem, settle_ms=80)
 
         self.ui.roiBtn.setChecked(True)
         self.roiClicked()

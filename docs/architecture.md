@@ -68,12 +68,60 @@ flowchart TD
 Hillshade **Pre-cache** is paint optimization only (not a new measurand, not
 Apply). Azimuth `0°` is screen north (top of the image). The viewer ViewBox
 uses `invertY`, so the light vector is `ly = -cos(az)` (same as gdaldem);
-east/west stay `lx = sin(az)`. Freeze elevation and Z factor, then build an azimuth atlas for the
-**current viewport** of the current `T` frame on a worker thread (step 5–90°,
-default 30°; 5° is the finest). Overlay paint crops the ViewBox (1 px halo) and
-downsamples to about screen size. The RAM line uses that patch. Combined mode
-blends independent coloured lights (Preset = four at 90°, same elevation).
-Optional later: cache the current angles over `T` so timeline scrub stays smooth.
+east/west stay `lx = sin(az)`. Freeze elevation and Z factor, then build an
+azimuth atlas for the **full current `T` frame** on a worker thread (step
+5–90°, default 30°; 5° is the finest). Shade Preview paints the **entire
+frame** once; pan/zoom only transforms the ImageItem (no recompute). Flow
+still uses a ViewBox crop for D8 (separate story). Combined mode blends
+independent coloured lights (Preset = four at 90°, same elevation). Optional
+later: cache the current angles over `T` so timeline scrub stays smooth.
+
+### Pixel identity (overlays)
+
+No implicit spatial resampling in analytical or derived views. A visible
+source pixel must never be discarded merely for rendering performance.
+
+The main viewer already passes the full frame to `ImageView`. **Shade**
+computes on the full height frame (source resolution). **Flow** may still
+crop to the visible ViewBox. Neither builds a smaller working matrix for
+speed (the old 1600-px cap is gone). Zoomed-out **paint** may downsample the
+display `ImageItem` after the ViewBox settles (~80 ms) — never blank, never
+on every mouse tick. Probe / Shade / Flow still read `ImageData`. Shade
+Preview must not hide the cube (`opacity 0`). At **native zoom**, 1 matrix
+pixel = 1 **physical** display pixel (`devicePixelRatio`; Qt logical ≠
+physical).
+
+Test rasters (stripes, checkerboard) are not generated in-core. A later
+suite sidecar streamer can emit `.npy` (+ optional spatial JSON), same
+path as `dgm-mosaic` / WOLKE. Conway and Synthetic Live stay the only
+in-core stream families.
+
+LUT HUD under IDLE shows **UI event-loop lag** (250 ms probe; label = median
+~1 s; amp = last 30 s at fixed 0–300 ms with green/yellow/red phases) — not
+paint FPS and not on the viewer paint path. Shade/Flow status still reports
+compute `1/dt` — that is not UI lag.
+Shade does **not** hook `sigRangeChanged`. The Shade RAM line is a Pre-cache
+hint: `psutil.virtual_memory` at 1 Hz while Preview/Pre-cache is on, sized
+from the **full frame**. The hard RAM gate runs once when the user enables
+Pre-cache.
+
+```mermaid
+flowchart LR
+  timer["QTimer 250ms"] --> tick["expected vs actual"]
+  tick --> lag["lag_ms"]
+  lag --> hud["LUT UI ms + amp"]
+```
+
+```mermaid
+flowchart TD
+  src["Full ImageData frame"] --> shade["Hillshade ∇z full frame"]
+  src --> crop["ViewBox crop + 1 px halo"]
+  shade --> itemS["Shade ImageItem — pan/zoom = transform"]
+  crop --> flow["D8 at source resolution"]
+  flow --> itemF["Flow ImageItem.setRect"]
+  itemS --> gpu["Renderer maps onto monitor pixels"]
+  itemF --> gpu
+```
 
 ```mermaid
 flowchart TD
@@ -97,7 +145,7 @@ flowchart TD
   hit -->|yes| swap["setImage from atlas"]
   hit -->|no| wait["Keep last overlay; status Caching"]
   worker --> done["All 12 ready"]
-  uncheck["Uncheck Pre-cache"] --> live["Live 80 ms recompute"]
+  uncheck["Uncheck Pre-cache"] --> live["Live full-frame recompute"]
 ```
 
 ```mermaid

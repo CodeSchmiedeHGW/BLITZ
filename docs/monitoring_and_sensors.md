@@ -2,9 +2,21 @@
 
 ## What BLITZ shows
 
-- **CPU %**: From `psutil.cpu_percent(interval=None)` — system-wide average over all cores. Updated every timer tick (~1 s).
+- **CPU %**: Bench shows **avg** over all cores and the **busiest core**.
+  `psutil.cpu_percent(percpu=True)` each tick (~0.5 s) while the Bench tab is
+  open. A 10% system average on 16 cores is often **one core at ~100%** —
+  Shade/Flow ∇z and D8 are single-thread NumPy, not a multicore kernel.
+- **UI lag** (LUT HUD under IDLE, always on): median Qt event-loop lag over
+  ~1 s (label) from a 250 ms probe timer; amp shows the last **30 s** with a
+  fixed Y range **0–300 ms** and traffic-light bands (green &lt;100 ms smooth,
+  yellow 100–300, red &gt;300 clips at top). Near 0 ms when the GUI thread is
+  free; rises when pan/zoom, BUSY work, or overlays block the loop. Not paint
+  FPS (Qt has no hidden 60 Hz loop), not capture FPS, not Shade/Flow `1/dt`.
+  No CPU/RAM on that first-page HUD — those stay on the Bench tab.
+- **Overlay compute** (Bench tab + Shade/Flow status): last hillshade/D8 time
+  as milliseconds and theoretical `1/dt` at the current crop.
 - **CPU peak**: Rolling maximum over the last N samples in the Bench sparkline. If the current value is lower than a recent peak, the label shows e.g. `CPU: 8.2% (peak 47%)` so short load spikes are visible even when the average stays low.
-- **RAM, Disk I/O**: From psutil; same on all platforms.
+- **RAM, Disk I/O**: From psutil on the Bench tab only; same on all platforms.
 
 ## Why “low CPU” can still mean loud fans
 

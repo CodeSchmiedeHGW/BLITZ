@@ -9,7 +9,6 @@ import numpy as np
 AZIMUTH_CACHE_STEP_DEG = 30
 AZIMUTH_CACHE_STEP_MIN_DEG = 5
 AZIMUTH_CACHE_STEP_MAX_DEG = 90
-VIEWPORT_MAX_EDGE = 1600
 VIEWPORT_HALO_PX = 1
 COMBINED_AZIMUTH_OFFSETS = (0.0, 90.0, 180.0, 270.0)
 FOUR_WAY_PRESET_COLORS: tuple[tuple[float, float, float], ...] = (
@@ -293,23 +292,15 @@ def viewport_slices(
     return (slice(ix0, ix1), slice(iy0, iy1)), rect
 
 
-def downsample_xy(arr: np.ndarray, max_edge: int = VIEWPORT_MAX_EDGE) -> np.ndarray:
-    """Integer-stride downsample so ``max(spatial) <= max_edge``."""
-    z = np.asarray(arr)
-    if z.ndim < 2:
-        return z
-    cap = int(max_edge)
-    if cap < 8:
-        cap = VIEWPORT_MAX_EDGE
-    a0, a1 = int(z.shape[0]), int(z.shape[1])
-    m = max(a0, a1)
-    if m <= cap:
-        return z
-    sx = max(1, int(np.ceil(a0 / cap)))
-    sy = max(1, int(np.ceil(a1 / cap)))
-    if z.ndim == 2:
-        return z[::sx, ::sy]
-    return z[::sx, ::sy, ...]
+def physical_display_px(logical_px: float, device_pixel_ratio: float = 1.0) -> int:
+    """Qt logical widget pixels → physical display pixels (``devicePixelRatio``)."""
+    try:
+        dpr = float(device_pixel_ratio)
+    except (TypeError, ValueError):
+        dpr = 1.0
+    if dpr <= 0.0:
+        dpr = 1.0
+    return max(1, int(round(float(logical_px) * dpr)))
 
 
 def extract_viewport_patch(
@@ -320,10 +311,14 @@ def extract_viewport_patch(
     y1: float,
     *,
     axis_order: str = "col-major",
-    max_edge: int = VIEWPORT_MAX_EDGE,
     halo: int = VIEWPORT_HALO_PX,
 ) -> tuple[np.ndarray, tuple[float, float, float, float]]:
-    """Visible crop plus halo, downsampled for overlay paint."""
+    """Visible crop plus halo at **source resolution**. No implicit downsample.
+
+    Overlay paint may stretch this patch onto the ViewBox; ∇z / D8 must see
+    every visible matrix pixel. Zoom-out mapping to the monitor is the
+    renderer's job, not a 1600-px working copy.
+    """
     sl, rect = viewport_slices(
         np.asarray(frame).shape,
         x0,
@@ -333,8 +328,7 @@ def extract_viewport_patch(
         axis_order=axis_order,
         halo=halo,
     )
-    patch = np.asarray(frame)[sl]
-    return downsample_xy(patch, max_edge), rect
+    return np.asarray(frame)[sl], rect
 
 
 def calculate_hillshade(

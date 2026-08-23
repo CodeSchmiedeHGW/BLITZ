@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
+import time
 from typing import Callable, Optional
 
 import numpy as np
 import pyqtgraph as pg
 from PyQt6 import sip
-from PyQt6.QtCore import QRectF, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QLabel
 
 from ..data.hillshade import (
     AZIMUTH_CACHE_STEP_DEG,
-    VIEWPORT_MAX_EDGE,
     ShadeLight,
     azimuth_atlas_nbytes,
     azimuth_atlas_peak_nbytes,
@@ -20,7 +20,6 @@ from ..data.hillshade import (
     azimuth_cache_order,
     calculate_hillshade,
     clamp_azimuth_cache_step,
-    extract_viewport_patch,
     rotate_lights_to_primary,
     scaled_height_gradients,
     shade_from_gradients,
@@ -107,12 +106,15 @@ class ShadeAdapter:
         status_label: Optional[QLabel] = None,
         ram_label: Optional[QLabel] = None,
         on_precache_off: Optional[Callable[[], None]] = None,
+        on_compute: Optional[Callable[[], None]] = None,
     ) -> None:
         self.viewer = viewer
         self._status = status_label
         self._ram_label = ram_label
         self._on_precache_off = on_precache_off
+        self._on_compute = on_compute
         self._preview = False
+        self.last_compute_s: Optional[float] = None
         self._precached = False
         self._azimuth = 315.0
         self._elevation = 45.0
@@ -120,8 +122,7 @@ class ShadeAdapter:
         self._step_deg = AZIMUTH_CACHE_STEP_DEG
         self._combined = False
         self._lights: list[ShadeLight] = [ShadeLight(315.0, 45.0)]
-        self._overlay_rect: Optional[tuple[float, float, float, float]] = None
-        self._patch_hw: Optional[tuple[int, int]] = None
+        self._frame_hw: Optional[tuple[int, int]] = None
         self._atlas: dict[int, np.ndarray] = {}
         self._generation = 0
         self._worker: Optional[_ShadeAtlasWorker] = None
@@ -143,15 +144,16 @@ class ShadeAdapter:
         self._timer.setInterval(50)
         self._timer.timeout.connect(self._on_timer)
 
+        # Full-frame overlay: pan/zoom is ViewBox only — do not recompute on range.
         viewer.timeLine.sigPositionChanged.connect(self._schedule)
         viewer.image_changed.connect(self._schedule)
         viewer.image_size_changed.connect(self._on_size_changed)
         viewer.destroyed.connect(self._on_viewer_destroyed)
-        try:
-            viewer.view.getViewBox().sigRangeChanged.connect(self._schedule)
-        except Exception:
-            pass
-        self._refresh_ram_label()
+        self._ram_style: str | None = None
+        self._ram_timer = QTimer(viewer)
+        self._ram_timer.setInterval(1000)
+        self._ram_timer.timeout.connect(self._refresh_ram_label)
+        self._set_ram_idle()
 
     @property
     def is_precached(self) -> bool:
@@ -160,6 +162,11 @@ class ShadeAdapter:
     @property
     def cache_step_deg(self) -> int:
         return self._step_deg
+
+    def _notify_compute(self) -> None:
+        cb = self._on_compute
+        if cb is not None:
+            cb()
 
     def _stop_timer(self) -> None:
         timer = self._timer
@@ -180,14 +187,16 @@ class ShadeAdapter:
                 self._atlas.clear()
             self._item.clear()
             self._item.setVisible(False)
-            self._overlay_rect = None
-            self._patch_hw = None
+            self._frame_hw = None
             try:
                 self.viewer.imageItem.setOpacity(1.0)
             except Exception:
                 pass
             self._set_status("Preview off · analysis = height")
+            self._sync_ram_watch()
+            self._notify_compute()
             return
+        self._sync_ram_watch()
         if self._precached:
             self._rebuild_atlas()
             return
@@ -198,7 +207,7 @@ class ShadeAdapter:
         if want == self._precached:
             return True
         if want and not self.can_precache():
-            self._refresh_ram_label()
+            self._sync_ram_watch()
             return False
         self._stop_timer()
         self._precached = want
@@ -207,20 +216,21 @@ class ShadeAdapter:
             self._atlas.clear()
             if self._preview:
                 self._schedule()
-            self._refresh_ram_label()
+            self._sync_ram_watch()
             if self._on_precache_off is not None:
                 self._on_precache_off()
             return True
         self._azimuth = float(self._snap_az())
         if not self._preview:
             self._preview = True
+        self._sync_ram_watch()
         self._rebuild_atlas()
         return True
 
     def set_step(self, step_deg: float) -> None:
         step = clamp_azimuth_cache_step(step_deg)
         if step == self._step_deg:
-            self._refresh_ram_label()
+            self._sync_ram_watch()
             return
         self._step_deg = step
         if self._precached:
@@ -230,7 +240,7 @@ class ShadeAdapter:
             self._azimuth = float(self._snap_az())
             self._rebuild_atlas()
             return
-        self._refresh_ram_label()
+        self._sync_ram_watch()
 
     def set_combined(self, on: bool) -> None:
         want = bool(on)
@@ -276,12 +286,11 @@ class ShadeAdapter:
 
     def can_precache(self) -> bool:
         """False if there is no frame or peak RAM would exceed 90% of free memory."""
-        spec = self._viewport_patch()
-        if spec is None:
+        frame = self._height_frame()
+        if frame is None:
             self._set_status("No image · load a height map first")
             return False
-        patch, _rect = spec
-        h, w = int(patch.shape[0]), int(patch.shape[1])
+        h, w = self._spatial_hw(frame)
         peak = azimuth_atlas_peak_nbytes(
             h, w, self._step_deg, channels=self._atlas_channels()
         )
@@ -289,7 +298,7 @@ class ShadeAdapter:
         if avail > 0 and peak > avail * _RAM_BLOCK_FRAC:
             n = len(azimuth_cache_bins(self._step_deg))
             self._set_status(
-                f"Pre-cache blocked · {n}× viewport at {self._step_deg}° needs "
+                f"Pre-cache blocked · {n}× full frame at {self._step_deg}° needs "
                 f"~{self._fmt_bytes(peak)} peak, only "
                 f"{get_available_ram():.1f} GB free. Coarser step."
             )
@@ -333,7 +342,7 @@ class ShadeAdapter:
         return
 
     def _schedule(self, *_args) -> None:
-        self._refresh_ram_label()
+        """Params / frame / image change. Pan/zoom does not call this."""
         if not self._preview:
             return
         if not _qobj_alive(self._timer):
@@ -351,7 +360,6 @@ class ShadeAdapter:
 
     def _on_size_changed(self, *_args) -> None:
         if not self._preview:
-            self._refresh_ram_label()
             return
         if self._precached:
             self._rebuild_atlas()
@@ -362,6 +370,10 @@ class ShadeAdapter:
         self._preview = False
         self._precached = False
         self._stop_timer()
+        try:
+            self._ram_timer.stop()
+        except RuntimeError:
+            pass
         self._cancel_worker()
 
     def _height_frame(self) -> Optional[np.ndarray]:
@@ -377,24 +389,31 @@ class ShadeAdapter:
             return None
         return np.asarray(frame)
 
+    def _spatial_hw(self, frame: np.ndarray) -> tuple[int, int]:
+        """``(h, w)`` for atlas sizing; ImageItem axisOrder decides which axes."""
+        spatial = np.asarray(frame).shape[:2]
+        order = str(getattr(self.viewer.imageItem, "axisOrder", "col-major"))
+        if order == "row-major":
+            return int(spatial[0]), int(spatial[1])
+        # col-major: array is (x, y) → report (y, x) as h×w for humans / RAM
+        return int(spatial[1]), int(spatial[0])
+
     def _rebuild_atlas(self) -> None:
         self._stop_timer()
         self._cancel_worker()
         self._atlas.clear()
         if not self._preview or not self._precached:
             return
-        spec = self._viewport_patch()
-        if spec is None:
+        frame = self._height_frame()
+        if frame is None:
             self._item.setVisible(False)
             self._set_status("No image · load a height map first")
             return
-        patch, rect = spec
-        self._overlay_rect = rect
-        self._patch_hw = (int(patch.shape[0]), int(patch.shape[1]))
+        self._frame_hw = self._spatial_hw(frame)
         if not self.can_precache():
             self.set_precached(False)
             return
-        copied = np.array(patch, copy=True, order="C")
+        copied = np.array(frame, copy=True, order="C")
         gen = self._generation
         self._worker = _ShadeAtlasWorker(
             copied,
@@ -457,8 +476,9 @@ class ShadeAdapter:
         self._set_precache_status()
 
     def _show_shade(self, shade: np.ndarray) -> None:
+        # Keep the cube visible under the overlay (ViewBox scales both together).
         try:
-            self.viewer.imageItem.setOpacity(0.0)
+            self.viewer.imageItem.setOpacity(1.0)
         except Exception:
             pass
         self._item.setImage(shade, autoLevels=False)
@@ -466,10 +486,11 @@ class ShadeAdapter:
             self._item.setLevels((0.0, 255.0))
         else:
             self._item.setLevels((0.0, 1.0))
-        rect = self._overlay_rect
-        if rect is not None:
-            rx, ry, rw, rh = rect
-            self._item.setRect(QRectF(rx, ry, rw, rh))
+        # Full frame: same transform as the base ImageItem (no viewport crop).
+        try:
+            self._item.setRect()
+        except Exception:
+            pass
         self._item.setVisible(True)
 
     def _refresh_now(self) -> None:
@@ -478,73 +499,39 @@ class ShadeAdapter:
         if self._precached:
             self._rebuild_atlas()
             return
-        spec = self._viewport_patch()
-        if spec is None:
+        frame = self._height_frame()
+        if frame is None:
             self._item.setVisible(False)
             self._set_status("No image · load a height map first")
             return
-        patch, rect = spec
-        self._overlay_rect = rect
-        self._patch_hw = (int(patch.shape[0]), int(patch.shape[1]))
+        self._frame_hw = self._spatial_hw(frame)
+        t0 = time.perf_counter()
         try:
             shade = calculate_hillshade(
-                patch,
+                frame,
                 self._azimuth,
                 self._elevation,
                 self._z_factor,
                 lights=self._lights,
             )
         except Exception as e:
+            self.last_compute_s = None
             self._item.setVisible(False)
             self._set_status(f"Shade failed: {e}")
+            self._notify_compute()
             return
+        self.last_compute_s = time.perf_counter() - t0
+        self._notify_compute()
 
         self._show_shade(shade)
-        mode = "combined" if self._combined else "viewport"
+        ms = 1000.0 * self.last_compute_s
+        fps = (1.0 / self.last_compute_s) if self.last_compute_s > 1e-9 else 0.0
+        h, w = self._frame_hw
         self._set_status(
-            f"Hillshade {mode} · az {self._azimuth:.0f}° elev {self._elevation:.0f}° "
-            f"Z×{self._z_factor:g} · {self._patch_hw[0]}×{self._patch_hw[1]} · "
-            f"analysis = height"
+            f"Hillshade full frame · az {self._azimuth:.0f}° elev {self._elevation:.0f}° "
+            f"Z×{self._z_factor:g} · {h}×{w} · "
+            f"{ms:.1f} ms ({fps:.0f} fps) · analysis = height"
         )
-
-    def _viewport_patch(
-        self,
-    ) -> Optional[tuple[np.ndarray, tuple[float, float, float, float]]]:
-        frame = self._height_frame()
-        if frame is None:
-            return None
-        x0, x1, y0, y1, max_edge, order = self._view_window(frame)
-        return extract_viewport_patch(
-            frame,
-            x0,
-            x1,
-            y0,
-            y1,
-            axis_order=order,
-            max_edge=max_edge,
-        )
-
-    def _view_window(
-        self,
-        frame: np.ndarray,
-    ) -> tuple[float, float, float, float, int, str]:
-        order = str(getattr(self.viewer.imageItem, "axisOrder", "col-major"))
-        spatial = np.asarray(frame).shape[:2]
-        if order == "row-major":
-            ny, nx = int(spatial[0]), int(spatial[1])
-        else:
-            nx, ny = int(spatial[0]), int(spatial[1])
-        max_edge = VIEWPORT_MAX_EDGE
-        x0, x1, y0, y1 = 0.0, float(nx), 0.0, float(ny)
-        try:
-            vb = self.viewer.view.getViewBox()
-            (vx0, vx1), (vy0, vy1) = vb.viewRange()
-            x0, x1, y0, y1 = float(vx0), float(vx1), float(vy0), float(vy1)
-            px = max(int(vb.width()), int(vb.height()), 1)
-            max_edge = int(max(64, min(VIEWPORT_MAX_EDGE, px)))
-        except Exception:
-            pass
-        return x0, x1, y0, y1, max_edge, order
 
     def _snap_az(self, azimuth: Optional[float] = None) -> int:
         src = self._azimuth if azimuth is None else azimuth
@@ -555,24 +542,57 @@ class ShadeAdapter:
             return f"{nbytes / (1024**3):.2f} GB"
         return format_size_mb(nbytes)
 
+    def _set_ram_idle(self) -> None:
+        if self._ram_label is None:
+            return
+        n = len(azimuth_cache_bins(self._step_deg))
+        self._ram_label.setText(
+            f"{n} full-frame bins at {self._step_deg}° · 5° finest"
+        )
+        if self._ram_style != "#888":
+            self._ram_label.setStyleSheet("color: #888; font-size: 10pt;")
+            self._ram_style = "#888"
+
+    def _sync_ram_watch(self) -> None:
+        """1 Hz psutil only while Preview or Pre-cache is on."""
+        timer = getattr(self, "_ram_timer", None)
+        if timer is None:
+            return
+        if self._preview or self._precached:
+            if not timer.isActive():
+                try:
+                    timer.start()
+                except RuntimeError:
+                    return
+            self._refresh_ram_label()
+            return
+        try:
+            timer.stop()
+        except RuntimeError:
+            pass
+        self._set_ram_idle()
+
     def _refresh_ram_label(self) -> None:
         if self._ram_label is None:
             return
+        if not (self._preview or self._precached):
+            self._set_ram_idle()
+            return
         step = self._step_deg
-        hw = self._patch_hw
+        hw = self._frame_hw
         if hw is None:
-            spec = self._viewport_patch()
-            if spec is None:
-                hw = None
-            else:
-                hw = (int(spec[0].shape[0]), int(spec[0].shape[1]))
+            frame = self._height_frame()
+            if frame is not None:
+                hw = self._spatial_hw(frame)
         n = len(azimuth_cache_bins(step))
         free_gb = get_available_ram()
         if hw is None:
             self._ram_label.setText(
-                f"{n} viewport frames at {step}° · 5° finest · load an image for RAM"
+                f"{n} full-frame bins at {step}° · 5° finest · load an image for RAM"
             )
-            self._ram_label.setStyleSheet("color: #888; font-size: 10pt;")
+            if self._ram_style != "#888":
+                self._ram_label.setStyleSheet("color: #888; font-size: 10pt;")
+                self._ram_style = "#888"
             return
         h, w = hw
         ch = self._atlas_channels()
@@ -588,20 +608,19 @@ class ShadeAdapter:
             f"{n}× {self._fmt_bytes(atlas)} atlas · peak ~{self._fmt_bytes(peak)} "
             f"· {free_gb:.1f} GB free"
         )
-        self._ram_label.setStyleSheet(f"color: {color}; font-size: 10pt;")
+        if self._ram_style != color:
+            self._ram_label.setStyleSheet(f"color: {color}; font-size: 10pt;")
+            self._ram_style = color
 
     def _set_precache_status(self, *, ready: bool = False) -> None:
         n = len(azimuth_cache_bins(self._step_deg))
         have = len(self._atlas)
         az = self._snap_az()
-        hw = self._patch_hw
-        if hw is None:
-            spec = self._viewport_patch()
-            atlas = 0 if spec is None else azimuth_atlas_nbytes(
-                spec[0].shape[0], spec[0].shape[1], self._step_deg
-            )
-        else:
-            atlas = azimuth_atlas_nbytes(hw[0], hw[1], self._step_deg)
+        hw = self._frame_hw
+        atlas = (
+            0 if hw is None
+            else azimuth_atlas_nbytes(hw[0], hw[1], self._step_deg)
+        )
         ram = f" · {self._fmt_bytes(atlas)}" if atlas else ""
         if ready or have >= n:
             self._set_status(
@@ -609,12 +628,10 @@ class ShadeAdapter:
                 f"elev {self._elevation:.0f}° Z×{self._z_factor:g}{ram} "
                 f"· analysis = height"
             )
-            self._refresh_ram_label()
             return
         self._set_status(
             f"Caching {have}/{n} · az {az}° step {self._step_deg}°{ram}…"
         )
-        self._refresh_ram_label()
 
     def _set_status(self, text: str) -> None:
         if self._status is not None:
