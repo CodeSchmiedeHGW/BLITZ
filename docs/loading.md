@@ -81,7 +81,7 @@ load_images(path)
 - **Normalize each image/frame** (Loading Options): wirkt auf den **Load** (pro Bild/Frame Stretch). Unabhaengig von der Preview.
 - **Preview normalize** (unter der HLine, nur Dialog): **nur Anzeige** in der Vorschau — aendert nicht, was geladen wird.
 - **8 bit / Grayscale**: wenn Quelle schon nativ → Checkbox checked, disabled, sichtbar ausgegraut (`set_checkbox_visibly_enabled`)
-- Nach erfolgreichem Load mit **T>1**: Timeline-Dock wird geoeffnet (`dock_t_line.show` / `raiseDock`); bei Einzelbild bleibt es versteckt.
+- After a successful load with **T>1**: the Timeline dock is shown **and given a usable height** (DockArea splitter restore — `show()` alone leaves a 0 px strip after splash `hide()`). A single image keeps it hidden.
 
 ---
 

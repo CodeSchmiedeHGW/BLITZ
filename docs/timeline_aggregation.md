@@ -4,6 +4,19 @@ Documentation of the Timeline Panel and Aggregate Mode.
 
 ## Timeline Panel (Bottom)
 
+Hidden for a single image (`T<=1`, including the splash). As soon as a time
+series arrives (`T>1` — video, EVT sidecar, live ring, …) the dock must open
+**already tall enough to use**, not as a collapsed splitter handle.
+
+```mermaid
+flowchart TD
+  n["ImageData.n_images"] --> q{T > 1?}
+  q -->|no| hide["hide Timeline dock"]
+  q -->|yes| show["show + min height"]
+  show --> split["restore QSplitter slice"]
+  split --> usable["plot + Frame Range visible"]
+```
+
 Two tabs control the mode:
 
 - **Frame:** Single-frame mode. The *Idx* spinner selects the current frame.

@@ -46,6 +46,8 @@ wrong, isolate Shade/Flow completely when off (3) autoDownsample only if needed.
 
 ## Recently done (this stretch)
 
+- **v2.2.1** Timeline dock opens at a usable height when T>1 (EVT/live/video);
+  RGB event stacks keep encoded LUT range (0…1 float / 0…255 uint8).
 - **UI lag HUD** under LUT IDLE (event-loop probe + amp); CPU/RAM stay Bench-only.
 - **Parked core-viewer taste test** — see above (2026-08-22).
 - **v2.1.1** Close-safe Shade/Flow timers; RGB cursor swatch (gray stays LUT);

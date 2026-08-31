@@ -9,7 +9,7 @@ This document describes how **Cam Mock** and **Webcam** (real camera) connect to
 - **Index 0** = oldest frame in the current timeline = **ring start**.
 - **Last index (n_images - 1)** = newest frame = **ring end** (“last point”).
 
-**During live stream:** The viewer is always moved to the **last frame** when new data arrives, so you see the live head (ring end).
+**During live stream:** The viewer is always moved to the **last frame** when new data arrives, so you see the live head (ring end). Once `T>1`, the bottom Timeline dock opens at a usable height (not a collapsed splitter strip).
 
 **On Stop:** Both sources send **one final snapshot** of the ring at stop time. The viewer stays on the last frame. The frozen timeline is then:
 - **Index 0** = ring start (oldest frame at stop),

@@ -32,6 +32,7 @@ from ..data.folder_scan import (
 from ..tools import (LoadingManager, format_pixel_value_fixed, format_size_mb,
                      get_available_ram, get_cpu_percent, get_cpu_percore,
                      get_disk_io_mbs, get_used_ram, log, pixel_to_swatch_rgb8)
+from .dock_geometry import restore_splitter_widget_extent, splitter_widget_extent
 
 
 def _pca_sync_vb2(plot_widget) -> None:
@@ -118,6 +119,8 @@ class MainWindow(QMainWindow):
         self._conway_life: ConwayLifeWidget | None = None
         self._real_camera_dialog: RealCameraDialog | None = None
         self._aggregate_first_open: bool = True
+        self._timeline_dock_last_h: int = 0
+        self._timeline_height_restore_pending: bool = False
 
         self.pca_adapter = PCAAdapter(self.ui.image_viewer)
         self.tof_adapter = TOFAdapter(self.ui.roi_plot)
@@ -754,6 +757,12 @@ class MainWindow(QMainWindow):
         if needs_range:
             self._ensure_timeline_dock_visible()
         else:
+            try:
+                h = splitter_widget_extent(self.ui.dock_t_line)
+                if h >= 80:
+                    self._timeline_dock_last_h = h
+            except Exception:
+                pass
             try:
                 self.ui.dock_t_line.setMinimumHeight(0)
             except Exception:
@@ -3605,12 +3614,48 @@ class MainWindow(QMainWindow):
         self.ui.spinbox_shade_z.blockSignals(False)
         self.shade_adapter.set_params(z_factor=float(value))
 
-    def _ensure_timeline_dock_visible(self) -> None:
-        """Re-open the Timeline after T>1. hide() can leave a 0-height strip."""
+    def _timeline_dock_min_height(self) -> int:
+        return max(96, int(getattr(self.ui, "_bottom_band_h", 100)))
+
+    def _apply_timeline_dock_height(self) -> None:
+        """Force the DockArea splitter to give Timeline a usable height."""
         dock = self.ui.dock_t_line
+        if dock.isHidden():
+            return
+        min_h = self._timeline_dock_min_height()
+        changed = restore_splitter_widget_extent(
+            dock,
+            min_h,
+            preferred_px=self._timeline_dock_last_h,
+            keep_sibling_px=200,
+        )
+        h = splitter_widget_extent(dock)
+        if h >= min_h:
+            self._timeline_dock_last_h = h
+        elif changed:
+            self._timeline_dock_last_h = max(min_h, self._timeline_dock_last_h)
+
+    def _deferred_timeline_dock_height(self) -> None:
+        self._timeline_height_restore_pending = False
+        self._apply_timeline_dock_height()
+        min_h = self._timeline_dock_min_height()
+        if splitter_widget_extent(self.ui.dock_t_line) < min_h:
+            QTimer.singleShot(80, self._apply_timeline_dock_height)
+        QTimer.singleShot(
+            0, getattr(self.ui, "_set_timeline_splitter_sizes", lambda: None)
+        )
+
+    def _ensure_timeline_dock_visible(self) -> None:
+        """Re-open the Timeline after T>1 at a usable height, not a 0 px strip.
+
+        Splash / single-frame loads call ``hide()``. The QSplitter keeps that
+        collapsed size, so ``show()`` alone leaves a dead handle that only
+        power users know to drag up (EVT sidecar, live ring, video).
+        """
+        dock = self.ui.dock_t_line
+        min_h = self._timeline_dock_min_height()
         dock.show()
         try:
-            min_h = max(80, int(getattr(self.ui, "_bottom_band_h", 100)))
             dock.setMinimumHeight(min_h)
         except Exception:
             pass
@@ -3618,9 +3663,15 @@ class MainWindow(QMainWindow):
             dock.raiseDock()
         except Exception:
             pass
-        QTimer.singleShot(
-            0, getattr(self.ui, "_set_timeline_splitter_sizes", lambda: None)
-        )
+        if splitter_widget_extent(dock) >= min_h:
+            self._timeline_dock_last_h = max(
+                self._timeline_dock_last_h, splitter_widget_extent(dock)
+            )
+            return
+        self._apply_timeline_dock_height()
+        if not self._timeline_height_restore_pending:
+            self._timeline_height_restore_pending = True
+            QTimer.singleShot(0, self._deferred_timeline_dock_height)
 
     def _raise_polyline_dock(self) -> None:
         if not self.ui.checkbox_polyline_profile.isChecked():

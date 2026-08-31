@@ -785,6 +785,20 @@ class ImageViewer(pg.ImageView):
             max_ = min_ + 1.0
         if (
             self.data is not None
+            and not self.data.is_greyscale()
+        ):
+            # RGB (event-camera OFF=red / ON=green, or photos): keep the
+            # encoded range. EVT sends log1p 0…1; uint8 photos stay 0…255.
+            mx = float(np.nanmax(self.image)) if self.image.size else 1.0
+            if self.image.dtype == np.uint8 or mx > 1.0 + 1e-3:
+                min_, max_ = 0.0, 255.0
+            else:
+                min_, max_ = 0.0, 1.0
+            self.setLevels(min=min_, max=max_)
+            self.ui.histogram.setHistogramRange(min_, max_)
+            return
+        if (
+            self.data is not None
             and self.data.is_greyscale()
             and self._auto_colormap
         ):

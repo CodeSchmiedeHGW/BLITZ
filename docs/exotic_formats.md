@@ -29,6 +29,11 @@ archives: decode once, re-bin with live Δt / polarity / window, and push stacks
 to BLITZ over the **WOLKE** Socket.IO + HTTP `.npy` contract. Not embedded in
 the BLITZ Flatpak. A later live/multi-cam streamer (**FUNKE**) is backlog only.
 
+**Colour contract (CD polarity):** R = OFF counts, G = ON counts, B = 0,
+stretched with `log1p / p99(unfiltered window)` to float 0…1 (or uint8 ×255).
+Leave File-tab **Normalize** off. RGB histogram levels stay 0…1 (float) or
+0…255 (uint8) — no plasma/bipolar stretch on colour stacks.
+
 ### DGM / GeoTIFF tiles (LGL)
 
 Do **not** mosaic in the BLITZ folder loader (that would stack tiles as `T`).

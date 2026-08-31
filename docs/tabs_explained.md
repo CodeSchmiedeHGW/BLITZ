@@ -38,7 +38,7 @@ Source-backed inventory of BLITZ analysis, visualization, and data-processing ca
 | **Probe** | Frames count, cursor position, value + swatch (RGB = pixel, gray = LUT) |
 | **LUT** | Histogram LUT, levels, colormap, Fit / Trim, IDLE + always-on UI-lag HUD |
 | **Options** | Tabbed control panel (File → Log). Tabs **wrap onto extra rows** so later pages (Stream, Log) stay visible instead of hiding off to the right. |
-| **Timeline** | ROI time series + Frame \| Range side panel |
+| **Timeline** | ROI time series + Frame \| Range; hidden for `T<=1`, opens at usable height when a stack arrives |
 | **Polyline** | Path-intensity profile (starts hidden; Tools → Show) |
 
 There is no separate toolbar; actions live in the menu bar, Options tabs, and docks.
@@ -281,6 +281,7 @@ Scrollable application logger (`LoggingTextEdit`).
 | **Min / Max** | Manual levels | Synced to histogram |
 | **Histogram LUT** | Interactive transfer function | pyqtgraph `HistogramLUTWidget` |
 | **Fit now / Keep fitting** | Auto levels | `calculate_lut_levels` — nanmin/max or percentile |
+| **RGB stacks** | Keep encoded range | Colour (e.g. EVT event-camera OFF=red / ON=green): Fit uses 0…1 (float) or 0…255 (uint8). No plasma/bipolar. Leave File-tab **Normalize** off. |
 | **Trim** | 0% / 1% / 2% / Custom | Percentile clip |
 | **Colormap + Auto** | Gradient selection | pyqtgraph Gradients |
 | **Log hist** | Log-scale histogram | — |
@@ -331,7 +332,9 @@ Core: `sample_polyline_profile` → `PolylineProfileResult(s, intensity, xs, ys,
 
 ## Timeline Panel
 
-Bottom dock + Frame \| Range side panel.
+Bottom dock + Frame \| Range side panel. Hidden for a single image; when `T>1`
+data arrives (file, EVT/WOLKE, live stream) the dock opens at a usable height
+so first-time users do not have to drag a collapsed splitter up.
 
 ### Frame mode
 
