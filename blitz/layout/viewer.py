@@ -14,7 +14,15 @@ from ..data.load import DataLoader, ImageData
 from ..theme import get_viewer_bg, get_timeline_curve_color, get_timeline_curve_colors_rgbw
 from ..data.ops import ReduceOperation
 from .. import colormaps as _colormaps
-from ..lut_levels import calculate_lut_levels, gray_auto_colormap, rgb_display_levels
+from ..lut_levels import (
+    GrayLutKind,
+    calculate_lut_levels,
+    classify_gray_lut,
+    display_levels_for_frame,
+    gray_auto_colormap,
+    levels_close,
+    rgb_display_levels,
+)
 from ..tools import fit_text, format_pixel_value, log
 from .display_downsample import install_debounced_auto_downsample
 
@@ -92,6 +100,7 @@ class ImageViewer(pg.ImageView):
         self._lut_percentile = 0.0
         self._levels_cache: tuple[float, float] | None = None
         self._levels_cache_percentile: float | None = None
+        self._gray_lut_kind: GrayLutKind | None = None
         self._background_image: ImageData | None = None
         self._last_set_image_time = 0.0
         self._set_image_throttle_sec = 0.035
@@ -744,18 +753,68 @@ class ImageViewer(pg.ImageView):
         self.image_changed.emit()
 
     def updateImage(self, autoHistogramRange: bool = False) -> None:
-        """Override: when Auto fit is off, never recalc LUT on frame change (timeline click/drag).
-        When Auto fit is on, re-apply LUT percentile levels after parent (which uses min/max).
+        """Paint the current frame. Keep fitting refits that frame only.
+
+        pyqtgraph's autoHistogramRange ping-pongs the LUT dock against Trim /
+        Auto pins and forces extra paints — leave it off on the frame tick.
+        Unchanged Min/Max skip setLevels (that would rebuild the QImage).
         """
-        super().updateImage(autoHistogramRange=self._auto_fit)
-        if self._auto_fit and self.image is not None:
-            mn, mx = self._calculate_levels(self.image)
-            if np.isfinite(mn) and np.isfinite(mx) and mx > mn:
-                self.setLevels(min=mn, max=mx)
-                self.ui.histogram.setHistogramRange(mn, mx)
+        super().updateImage(autoHistogramRange=False)
+        if not self._auto_fit or self.image is None:
+            return
+        frame = self._displayed_frame()
+        if frame is None:
+            return
+        mn, mx = self._keep_fitting_levels(frame)
+        self._apply_levels_if_changed(mn, mx)
+
+    def _displayed_frame(self) -> Optional[np.ndarray]:
+        """The array currently on screen (one T slice), not the whole cube."""
+        img = self.image
+        if img is None:
+            return None
+        axes = getattr(self, "axes", None) or {}
+        if axes.get("t") is not None and img.ndim >= 3:
+            n = int(img.shape[0])
+            if n <= 0:
+                return img
+            idx = int(self.currentIndex)
+            idx = 0 if idx < 0 else (n - 1 if idx >= n else idx)
+            return img[idx]
+        return img
+
+    def _keep_fitting_levels(self, frame: np.ndarray) -> tuple[float, float]:
+        rgb = self.data is not None and not self.data.is_greyscale()
+        kind: GrayLutKind | None = None
+        if not rgb and self._auto_colormap:
+            kind = self._gray_lut_kind
+            if kind is None and self.image is not None:
+                kind = classify_gray_lut(self.image)
+                self._gray_lut_kind = kind
+        return display_levels_for_frame(
+            frame,
+            percentile=self._lut_percentile,
+            gray_kind=kind,
+            rgb=rgb,
+        )
+
+    def _apply_levels_if_changed(self, mn: float, mx: float) -> None:
+        if not (np.isfinite(mn) and np.isfinite(mx) and mx > mn):
+            return
+        current = None
+        try:
+            current = self.getImageItem().getLevels()
+        except Exception:
+            current = None
+        if levels_close(current, (mn, mx)):
+            return
+        self.setLevels(min=mn, max=mx)
+        self.ui.histogram.setHistogramRange(mn, mx)
 
     def toggle_auto_colormap(self) -> None:
         self._auto_colormap = not self._auto_colormap
+        if not self._auto_colormap:
+            self._gray_lut_kind = None
 
     def set_auto_fit(self, enabled: bool) -> None:
         self._auto_fit = enabled
@@ -780,6 +839,7 @@ class ImageViewer(pg.ImageView):
     def autoLevels(self) -> None:
         if self.image is None:
             return
+        self._gray_lut_kind = None
         min_, max_ = self._calculate_levels(self.image)
         if not np.isfinite(min_):
             min_ = 0.0
@@ -789,8 +849,8 @@ class ImageViewer(pg.ImageView):
             self.data is not None
             and not self.data.is_greyscale()
         ):
-            # RGB: uint8 photos/occupancy 0…255; float rungs 0…1;
-            # uint16 event counts 0…p99 of positive values (shared R/G ladder).
+            # RGB: uint8 photos 0…255; float rungs 0…1;
+            # uint16 colour 0…p99 of positive values (shared R/G ladder).
             min_, max_ = rgb_display_levels(self.image)
             self.setLevels(min=min_, max=max_)
             self.ui.histogram.setHistogramRange(min_, max_)
@@ -807,7 +867,8 @@ class ImageViewer(pg.ImageView):
     def _apply_gray_auto_colormap(
         self, min_: float, max_: float
     ) -> tuple[float, float]:
-        """Pick event / bipolar / plasma from the cube; optional level pin."""
+        """Pick greyclip / plasma / bipolar from the cube; optional level pin."""
+        self._gray_lut_kind = classify_gray_lut(self.image)
         cmap, levels = gray_auto_colormap(self.image)
         if levels is not None:
             min_, max_ = levels
@@ -881,7 +942,16 @@ class ImageViewer(pg.ImageView):
 
     def update_image(self, live_update: bool = False, keep_timestep: bool = False) -> None:
         if live_update:
-            self.setImage(self.data.image, skip_roi_init=True)
+            # Do not autoRange / pyqtgraph-autoLevels: that recenters the view
+            # and re-percentiles the ring on every tick. Keep fitting still
+            # runs from updateImage on the displayed frame.
+            self.setImage(
+                self.data.image,
+                skip_roi_init=True,
+                autoRange=False,
+                autoLevels=False,
+                autoHistogramRange=False,
+            )
         else:
             img = self.data.image
             self.setImage(

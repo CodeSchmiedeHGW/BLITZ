@@ -368,7 +368,7 @@ class MainWindow(QMainWindow):
         )
         self.ui.image_viewer.histogram_ready.connect(self._apply_lut_log_state)
         self.ui.image_viewer.timeLine.sigPositionChanged.connect(
-            lambda: QTimer.singleShot(0, self._apply_lut_log_state)
+            self._on_timeline_lut_log
         )
         self.ui.checkbox_lut_log.stateChanged.connect(self._on_lut_log_changed)
         self._histogram_log_disconnected = False
@@ -623,7 +623,7 @@ class MainWindow(QMainWindow):
             self.toggle_rosee
         )
         self.ui.image_viewer.timeLine.sigPositionChanged.connect(
-            self.toggle_rosee
+            self._on_timeline_rosee
         )
         self.ui.checkbox_rosee_show_lines.stateChanged.connect(
             self.toggle_rosee
@@ -1580,6 +1580,12 @@ class MainWindow(QMainWindow):
         with LoadingManager(self, "Masking...", blocking_label=self.ui.blocking_status, blocking_delay_ms=0):
             self.ui.image_viewer.image_mask(Path(file_path))
 
+    def _on_timeline_rosee(self) -> None:
+        """RoSEE overlays follow the frame only while the overlay is on."""
+        if not self.ui.checkbox_rosee_active.isChecked():
+            return
+        self.toggle_rosee()
+
     def toggle_rosee(self) -> None:
         enabled = self.ui.checkbox_rosee_active.isChecked()
         if enabled:
@@ -2333,6 +2339,12 @@ class MainWindow(QMainWindow):
         """Toggle logarithmic scale on histogram counts via data transform (no setLogMode)."""
         self._apply_lut_log_state()
 
+    def _on_timeline_lut_log(self) -> None:
+        """Log-hist curve is disconnected from ImageItem; refresh on frame tick."""
+        if not self.ui.checkbox_lut_log.isChecked():
+            return
+        QTimer.singleShot(0, self._apply_lut_log_state)
+
     def _apply_lut_log_state(self) -> None:
         """Apply log/linear histogram display. Uses data transform instead of setLogMode to keep
         Y-axis anchored at bottom (avoids pyqtgraph ViewBox log-mode jump)."""
@@ -2456,9 +2468,9 @@ class MainWindow(QMainWindow):
             size_ratio=self.ui.spinbox_load_size.value(),
             subset_ratio=self.ui.spinbox_load_subset.value(),
             max_ram=self.ui.spinbox_max_ram.value(),
-            convert_to_8_bit=self.ui.checkbox_load_8bit.isChecked(),
-            normalize=self.ui.checkbox_load_normalize.isChecked(),
-            grayscale=self.ui.checkbox_load_grayscale.isChecked(),
+            convert_to_8_bit=False,
+            normalize=False,
+            grayscale=False,
         )
         self._web_connection.ingest_started.connect(self._on_web_ingest_started)
         self._web_connection.ingest_progress.connect(self._on_web_ingest_progress)

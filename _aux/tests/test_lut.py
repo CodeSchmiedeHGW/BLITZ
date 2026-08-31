@@ -12,9 +12,12 @@ from blitz.lut_levels import (
     calculate_lut_levels,
     classify_gray_lut,
     counts_display_levels,
+    display_levels_for_frame,
     gray_auto_colormap,
+    levels_close,
     occupancy_display_levels,
     rgb_display_levels,
+    signed_display_levels,
 )
 
 
@@ -101,7 +104,7 @@ class TestClassifyGrayLut:
         assert classify_gray_lut(img) == "occupancy"
         assert occupancy_display_levels(img) == (0.0, 255.0)
         cmap, levels = gray_auto_colormap(img)
-        assert cmap == "event"
+        assert cmap == "greyclip"
         assert levels == (0.0, 255.0)
 
     def test_occupancy_uint8_0_1(self) -> None:
@@ -110,13 +113,24 @@ class TestClassifyGrayLut:
         assert classify_gray_lut(img) == "occupancy"
         assert occupancy_display_levels(img) == (0.0, 1.0)
         cmap, levels = gray_auto_colormap(img)
-        assert cmap == "event"
+        assert cmap == "greyclip"
         assert levels == (0.0, 1.0)
 
     def test_occupancy_squeezes_channel_axis(self) -> None:
         img = np.zeros((2, 4, 4, 1), dtype=np.uint8)
         img[0, 1, 1, 0] = 255
         assert classify_gray_lut(img) == "occupancy"
+
+    def test_states_uint8_even_rungs(self) -> None:
+        img = np.zeros((8, 8), dtype=np.uint8)
+        img[0, 0] = 85
+        img[0, 1] = 170
+        img[1, 1] = 255
+        assert classify_gray_lut(img) == "states"
+        cmap, levels = gray_auto_colormap(img)
+        assert cmap == "event"
+        assert levels == (0.0, 255.0)
+        assert display_levels_for_frame(img, gray_kind="states") == (0.0, 255.0)
 
     def test_uint16_sparse_counts_p99(self) -> None:
         img = np.zeros((200, 200), dtype=np.uint16)
@@ -127,7 +141,7 @@ class TestClassifyGrayLut:
         assert mn == 0.0
         assert mx == 3.0
         cmap, levels = gray_auto_colormap(img)
-        assert cmap == "event"
+        assert cmap == "plasma"
         assert levels == (0.0, 3.0)
 
     def test_signed_int16_bipolar(self) -> None:
@@ -148,3 +162,50 @@ class TestClassifyGrayLut:
         img = np.arange(256, dtype=np.uint16).reshape(16, 16)
         img = img + 10
         assert classify_gray_lut(img) == "generic"
+
+
+class TestDisplayLevelsForFrame:
+    """Keep fitting must use the displayed frame, not a cube-wide cache."""
+
+    def test_counts_frame_p99_not_cube_max(self) -> None:
+        cube = np.zeros((4, 40, 40), dtype=np.uint16)
+        cube[0, :8, :] = 3
+        cube[0, 0, 0] = 1000
+        cube[1, :8, :] = 10
+        cube[1, 0, 0] = 1000
+        cube_trim = calculate_lut_levels(cube, 0.0)
+        frame = display_levels_for_frame(cube[1], gray_kind="counts")
+        assert cube_trim == (0.0, 1000.0)
+        assert frame == (0.0, 10.0)
+
+    def test_occupancy_stable(self) -> None:
+        frame = np.zeros((8, 8), dtype=np.uint8)
+        frame[1, 1] = 255
+        assert display_levels_for_frame(frame, gray_kind="occupancy") == (0.0, 255.0)
+
+    def test_signed_symmetric(self) -> None:
+        frame = np.array([[-4, 0, 2]], dtype=np.int16)
+        assert signed_display_levels(frame) == (-4.0, 4.0)
+        assert display_levels_for_frame(frame, gray_kind="signed") == (-4.0, 4.0)
+
+    def test_trim_generic(self) -> None:
+        frame = np.linspace(0.0, 10.0, 64).reshape(8, 8).astype(np.float32)
+        mn, mx = display_levels_for_frame(frame, percentile=0.0)
+        assert mn == 0.0
+        assert mx == 10.0
+
+    def test_rgb_uint8(self) -> None:
+        img = np.zeros((4, 4, 3), dtype=np.uint8)
+        img[1, 1] = (255, 0, 0)
+        assert display_levels_for_frame(img, rgb=True) == (0.0, 255.0)
+
+
+class TestLevelsClose:
+    def test_skip_identical(self) -> None:
+        assert levels_close((0.0, 255.0), (0.0, 255.0)) is True
+
+    def test_apply_when_changed(self) -> None:
+        assert levels_close((0.0, 3.0), (0.0, 1000.0)) is False
+
+    def test_none_current_must_apply(self) -> None:
+        assert levels_close(None, (0.0, 1.0)) is False

@@ -29,26 +29,30 @@ archives: decode once, re-bin with live Δt / polarity / window, and push stacks
 to BLITZ over the **WOLKE** Socket.IO + HTTP `.npy` contract. Not embedded in
 the BLITZ Flatpak. A later live/multi-cam streamer (**FUNKE**) is backlog only.
 
-**Event cube:** the sidecar sends **one grayscale** `.npy` (`T, H, W`) — never
-RGB. Polarität color (OFF=red, ON=green, yellow=both) is only the Event reader
-preview. Default **counts** is `uint16` activity (`ON+OFF`); **occupancy** is
-`uint8` 0/255 (fired or not). Signed / ON-only / OFF-only are other gray views
-of the same planes. Leave File-tab **Normalize** off so counts stay physical.
+**Event cube:** the sidecar **Send as** is one of:
 
-BLITZ **Auto** classifies that gray cube (no sidecar metadata) and picks the
-LUT. Occupancy and sparse counts share the **`event`** colormap (black → blue
-→ amber); occupancy pins 0…255 (or 0…1), counts pin 0…p99 of positive values.
-Signed stays **bipolar**. Everything else (float, dense photos) stays **plasma**.
+- **states** (default) — one `uint8` channel, four even rungs: 0 = nothing,
+  85 = OFF, 170 = ON, 255 = both. Auto uses **`event`** (black → red → green
+  → yellow) pinned 0…255. Any other colormap works on the same rungs.
+- **counts** — `uint16` gray events/pixel/Δt (activity `ON+OFF` when polarity
+  is color). Auto uses **plasma**, levels 0…p99 of positives.
+- **occupancy** — `uint8` gray binary 0/255. Auto uses **greyclip**, levels
+  0…255 (or 0…1).
+
+Signed / ON-only / OFF-only are gray views of the same planes (counts or
+occupancy). Stream ingest does **not** apply File-tab 8-bit / grayscale
+(8-bit would zero uint16 counts).
 
 ```mermaid
 flowchart TD
   cube["Gray cube from EVT"]
   cls{"classify_gray_lut"}
   cube --> cls
-  cls -->|"uint8 unique in 0, 255 or 0, 1"| occ["event LUT, levels 0 to 255"]
-  cls -->|"uint16 or uint8 many rungs"| cnt["event LUT, levels 0 to p99 positives"]
+  cls -->|"uint8 unique in 0, 255 or 0, 1"| occ["greyclip, levels 0 to 255"]
+  cls -->|"uint8 unique in 0, 85, 170, 255"| st["event LUT, levels 0 to 255"]
+  cls -->|"sparse uint16 or uint8 many rungs"| cnt["plasma, levels 0 to p99 positives"]
   cls -->|"min less than 0 less than max"| bip["bipolar, symmetric"]
-  cls -->|"float / photos / rest"| plas["plasma as today"]
+  cls -->|"float / photos / rest"| plas["plasma plus Trim"]
 ```
 
 ### DGM / GeoTIFF tiles (LGL)

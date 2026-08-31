@@ -378,8 +378,9 @@ class UI_MainWindow(QWidget):
         self.combobox_colormap = QComboBox()
         self.combobox_colormap.setMinimumWidth(100)
         self.combobox_colormap.setToolTip(
-            "Colormap preset. Auto picks plasma, bipolar, or event from the "
-            "data. Right-click the color bar for more advanced features."
+            "Colormap preset. Auto picks greyclip (binary occupancy), "
+            "event (polarity states 0/85/170/255), plasma (sparse counts), "
+            "or bipolar. Right-click the color bar for more advanced features."
         )
         # Common presets first, then the rest from pyqtgraph Gradients
         _colormaps.ensure_registered()

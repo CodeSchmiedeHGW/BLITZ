@@ -264,7 +264,7 @@ This is the page **EVT** and **WOLKE** tell you to open (there is no separate Ne
 | **Generate Synthetic Live Data Stream** | Lissajous / Lightning ring buffer | No hardware; FPS, resolution, grayscale, exposure knobs |
 | **Game of Life** | Classic Conway B3/S23 ring buffer | Sibling; W64×H128; Classic 0/1 or Ember 0…N; cell scale 1; pattern icons; Speed live; scrub after Stop |
 | **Webcam** | USB camera via OpenCV | Exposure, gain, brightness, contrast; ring buffer |
-| **Connect (EVT / WOLKE)** | Remote `.npy` ingest | Socket.IO + HTTP download; **NET** + % while downloading, **BUSY** while opening; index-only WOLKE sync seeks the cached cube (no reload, no BUSY, ROI/options kept) |
+| **Connect (EVT / WOLKE)** | Remote `.npy` ingest | Socket.IO + HTTP download; **NET** + % while downloading, **BUSY** while opening; index-only WOLKE sync seeks the cached cube (no reload, no BUSY, ROI/options kept). File-tab 8-bit / Normalize / Grayscale are **not** applied (8-bit would zero uint16 counts). |
 
 ---
 
@@ -280,10 +280,10 @@ Scrollable application logger (`LoggingTextEdit`).
 |---------|--------------|-------------------|
 | **Min / Max** | Manual levels | Synced to histogram |
 | **Histogram LUT** | Interactive transfer function | pyqtgraph `HistogramLUTWidget` |
-| **Fit now / Keep fitting** | Auto levels | `calculate_lut_levels` — nanmin/max or percentile |
-| **RGB stacks** | Keep encoded range | Photos: uint8 0…255; float 0…1. Event-camera cubes from EVT are **grayscale** (uint16 counts / uint8 occupancy), not RGB. |
+| **Fit now / Keep fitting** | Auto levels | Fit now = whole cube. Keep fitting = **current frame** (Trim, or Auto pin for occupancy / counts / signed). Unchanged Min/Max skip a redraw. |
+| **RGB stacks** | Keep encoded range | Photos: uint8 0…255; float 0…1. EVT cubes are grayscale (states / counts / occupancy). |
 | **Trim** | 0% / 1% / 2% / Custom | Percentile clip |
-| **Colormap + Auto + Log hist** | Gradient selection; log-scale histogram counts | Auto on grayscale: occupancy / sparse counts → **`event`**; signed → **bipolar**; else **plasma**. Preset `event` is black → blue → amber. |
+| **Colormap + Auto + Log hist** | Gradient selection; log-scale histogram counts | Auto on grayscale: binary occupancy → **greyclip**; polarity states (0/85/170/255) → **`event`** (black → red → green → yellow); sparse counts → **plasma** (0…p99); signed → **bipolar**; else **plasma**. |
 | **Load / Export LUT** | Wired in code | Currently **hidden** (`setVisible(False)`) |
 
 ---

@@ -1,8 +1,8 @@
 """BLITZ colormap presets on top of pyqtgraph Gradients.
 
 Importing this module registers ``event`` so the LUT combo and Auto can
-use it. Tick colours: black → dark blue → amber (sparse event counts;
-occupancy only hits the endpoints).
+use it for EVT polarity **states** (uint8 0 / 85 / 170 / 255).
+Ticks: black → red → green → yellow (none / OFF / ON / both).
 """
 from __future__ import annotations
 
@@ -13,9 +13,9 @@ EVENT_CMAP = "event"
 _EVENT_GRADIENT = {
     "ticks": [
         (0.0, (0, 0, 0, 255)),
-        (0.28, (8, 28, 88, 255)),
-        (0.62, (36, 96, 168, 255)),
-        (1.0, (255, 196, 48, 255)),
+        (1.0 / 3.0, (255, 0, 0, 255)),
+        (2.0 / 3.0, (0, 255, 0, 255)),
+        (1.0, (255, 255, 0, 255)),
     ],
     "mode": "rgb",
 }

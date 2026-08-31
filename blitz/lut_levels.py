@@ -5,10 +5,12 @@ from typing import Literal
 
 import numpy as np
 
-GrayLutKind = Literal["occupancy", "counts", "signed", "generic"]
+GrayLutKind = Literal["occupancy", "states", "counts", "signed", "generic"]
 
 _UNIQUE_SAMPLE_CAP = 1_000_000
 _COUNTS_ZERO_FRAC = 0.5
+_STATE_RUNGS = {0, 85, 170, 255}
+_STATE_MARKS = {85, 170}
 
 
 def calculate_lut_levels(image: np.ndarray, percentile: float) -> tuple[float, float]:
@@ -34,12 +36,12 @@ def _positive_p99_hi(arr: np.ndarray) -> float:
 
 
 def rgb_display_levels(image: np.ndarray) -> tuple[float, float]:
-    """LUT range for RGB cubes (photos, occupancy, or event counts).
+    """LUT range for RGB cubes (photos).
 
-    uint8 → 0…255 (photos and EVT occupancy).
+    uint8 → 0…255.
     float with max ≤ 1 → 0…1 (legacy EVT rungs).
-    Otherwise (uint16 / float counts) → 0 … p99 of **positive** values so
-    R and G share one ladder (yellow mixed pixels stay yellow).
+    Otherwise (uint16 / float) → 0 … p99 of **positive** values so
+    R and G share one ladder.
     """
     arr = np.asarray(image)
     if arr.size == 0:
@@ -53,6 +55,11 @@ def rgb_display_levels(image: np.ndarray) -> tuple[float, float]:
     if arr.dtype.kind == "f" and mx <= 1.0 + 1e-3:
         return 0.0, 1.0
     return 0.0, _positive_p99_hi(arr)
+
+
+def states_display_levels(_image: np.ndarray) -> tuple[float, float]:
+    """Pin EVT polarity states: 0…255 (rungs 0 / 85 / 170 / 255)."""
+    return 0.0, 255.0
 
 
 def occupancy_display_levels(image: np.ndarray) -> tuple[float, float]:
@@ -103,7 +110,8 @@ def _unique_ints(sample: np.ndarray) -> set[int]:
 def classify_gray_lut(image: np.ndarray) -> GrayLutKind:
     """How Auto should colour a grayscale cube (no Qt).
 
-    occupancy — integer unique ⊆ {0, 255} or ⊆ {0, 1} (EVT who-fired).
+    occupancy — integer unique ⊆ {0, 255} or ⊆ {0, 1} (EVT binary who-fired).
+    states — uint8 unique ⊆ {0, 85, 170, 255} and includes 85 or 170.
     counts — unsigned integer, >2 rungs, mostly zeros (sparse event counts).
     signed — values straddle zero (ON−OFF).
     generic — float, dense photos, everything else (plasma + Trim).
@@ -127,6 +135,8 @@ def classify_gray_lut(image: np.ndarray) -> GrayLutKind:
     vals = _unique_ints(sample)
     if vals <= {0, 1} or vals <= {0, 255}:
         return "occupancy"
+    if vals <= _STATE_RUNGS and vals & _STATE_MARKS:
+        return "states"
 
     if mn >= 0 and len(vals) > 2:
         # uint8 photos have hundreds of gray levels; EVT 8-bit counts do not.
@@ -138,6 +148,22 @@ def classify_gray_lut(image: np.ndarray) -> GrayLutKind:
     return "generic"
 
 
+def signed_display_levels(image: np.ndarray) -> tuple[float, float]:
+    """Symmetric bipolar range around zero."""
+    arr = np.asarray(image)
+    if arr.size == 0:
+        return -1.0, 1.0
+    with np.errstate(invalid="ignore", over="ignore"):
+        mn = float(np.nanmin(arr))
+        mx = float(np.nanmax(arr))
+    if not np.isfinite(mn):
+        mn = -1.0
+    if not np.isfinite(mx):
+        mx = 1.0
+    r = max(abs(mn), abs(mx), 1.0)
+    return -r, r
+
+
 def gray_auto_colormap(
     image: np.ndarray,
 ) -> tuple[str, tuple[float, float] | None]:
@@ -147,17 +173,60 @@ def gray_auto_colormap(
     """
     kind = classify_gray_lut(image)
     if kind == "occupancy":
-        return "event", occupancy_display_levels(image)
+        return "greyclip", occupancy_display_levels(image)
+    if kind == "states":
+        return "event", states_display_levels(image)
     if kind == "counts":
-        return "event", counts_display_levels(image)
+        return "plasma", counts_display_levels(image)
     if kind == "signed":
-        with np.errstate(invalid="ignore", over="ignore"):
-            mn = float(np.nanmin(image))
-            mx = float(np.nanmax(image))
-        if not np.isfinite(mn):
-            mn = -1.0
-        if not np.isfinite(mx):
-            mx = 1.0
-        r = max(abs(mn), abs(mx), 1.0)
-        return "bipolar", (-r, r)
+        return "bipolar", signed_display_levels(image)
     return "plasma", None
+
+
+def display_levels_for_frame(
+    image: np.ndarray,
+    *,
+    percentile: float = 0.0,
+    gray_kind: GrayLutKind | None = None,
+    rgb: bool = False,
+) -> tuple[float, float]:
+    """Min/Max Keep fitting would apply to one displayed frame.
+
+    ``gray_kind`` is the cube classification from Auto (not re-probed each
+    frame). ``None`` means Trim / min-max. RGB uses the encoded ladder.
+    """
+    arr = np.asarray(image)
+    if arr.size == 0:
+        return 0.0, 1.0
+    if rgb:
+        return rgb_display_levels(arr)
+    if gray_kind == "occupancy":
+        return occupancy_display_levels(arr)
+    if gray_kind == "states":
+        return states_display_levels(arr)
+    if gray_kind == "counts":
+        return counts_display_levels(arr)
+    if gray_kind == "signed":
+        return signed_display_levels(arr)
+    mn, mx = calculate_lut_levels(arr, percentile)
+    if not np.isfinite(mn):
+        mn = 0.0
+    if not np.isfinite(mx) or mx <= mn:
+        mx = mn + 1.0
+    return mn, mx
+
+
+def levels_close(
+    current: tuple[float, float] | None,
+    new: tuple[float, float],
+) -> bool:
+    """True when LUT Min/Max need not be pushed again (skip a QImage rebuild)."""
+    if current is None or len(current) != 2:
+        return False
+    a0, a1 = float(current[0]), float(current[1])
+    b0, b1 = float(new[0]), float(new[1])
+    if not (np.isfinite(a0) and np.isfinite(a1) and np.isfinite(b0) and np.isfinite(b1)):
+        return False
+    span = max(abs(b1 - b0), abs(a1 - a0), 1.0)
+    tol = max(1e-6, 1e-4 * span)
+    return abs(a0 - b0) <= tol and abs(a1 - b1) <= tol

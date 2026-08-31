@@ -61,3 +61,21 @@ def install_debounced_auto_downsample(
     timer.timeout.connect(flush)
     item.viewTransformChanged = on_view_transform_changed
     item._blitz_ds_timer = timer
+
+    orig_render = item.render
+
+    def render() -> None:
+        """Paint full-res when device mapping is not ready (never blank)."""
+        orig_render()
+        if not getattr(item, "_unrenderable", False):
+            return
+        if getattr(item, "image", None) is None:
+            return
+        was = item.autoDownsample
+        item.autoDownsample = False
+        try:
+            orig_render()
+        finally:
+            item.autoDownsample = was
+
+    item.render = render

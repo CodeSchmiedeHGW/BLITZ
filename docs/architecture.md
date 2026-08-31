@@ -100,6 +100,23 @@ LUT HUD under IDLE shows **UI event-loop lag** (250 ms probe; label = median
 ~1 s; amp = last 30 s at fixed 0–300 ms with green/yellow/red phases) — not
 paint FPS and not on the viewer paint path. Shade/Flow status still reports
 compute `1/dt` — that is not UI lag.
+
+Keep fitting on a timeline tick uses the **displayed frame**, not the whole
+cube, and skips `setLevels` when Min/Max are unchanged. The LUT dock does
+not auto-range on that tick (that used to fight Auto pins and double-paint).
+
+```mermaid
+flowchart TD
+  tick["Timeline frame tick"]
+  tick --> paint["ImageItem paint current frame"]
+  tick --> kf{"Keep fitting on?"}
+  kf -->|"no"| done["LUT unchanged"]
+  kf -->|"yes"| frame["levels from current T slice"]
+  frame --> same{"Min/Max unchanged?"}
+  same -->|"yes"| done
+  same -->|"no"| set["setLevels + histogram X"]
+```
+
 Shade does **not** hook `sigRangeChanged`. The Shade RAM line is a Pre-cache
 hint: `psutil.virtual_memory` at 1 Hz while Preview/Pre-cache is on, sized
 from the **full frame**. The hard RAM gate runs once when the user enables

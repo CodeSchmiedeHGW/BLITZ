@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-08-31
+
+### Fixed
+
+- Keep fitting on a frame tick refits the **current frame** and skips LUT work when Min/Max did not change. Scrubbing a small Event-reader cube no longer re-percentiles the whole stack or ping-pongs the histogram against Auto pins.
+- Timeline scrub no longer rebuilds the LUT histogram while Log hist is off, and no longer runs RoSEE while that overlay is off.
+- Live `setImage` no longer auto-ranges the view or pyqtgraph-autoLevels on every ring tick.
+- Zoom-paint downsample no longer blanks the ImageItem when device mapping is not ready (falls back to full-res).
+
+### Changed
+
+- LUT Auto: binary occupancy uses **greyclip**; polarity **states** (`uint8` 0/85/170/255) use **`event`** (black → red → green → yellow, 0…255); sparse event counts use **plasma** (0…p99 of positives).
+- Stream ingest no longer applies File-tab 8-bit / Normalize / Grayscale (8-bit would zero uint16 counts).
+
 ## [2.3.0] - 2026-08-31
 
 ### Added
@@ -38,7 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - In-core File-tab test patterns.
 
-[Unreleased]: https://github.com/PiMaV/BLITZ/compare/build-v2.3.0...HEAD
+[Unreleased]: https://github.com/PiMaV/BLITZ/compare/build-v2.3.1...HEAD
+[2.3.1]: https://github.com/PiMaV/BLITZ/compare/build-v2.3.0...build-v2.3.1
 [2.3.0]: https://github.com/PiMaV/BLITZ/compare/build-v2.2.1...build-v2.3.0
 [2.2.1]: https://github.com/PiMaV/BLITZ/compare/build-v2.2.0...build-v2.2.1
 [2.2.0]: https://github.com/PiMaV/BLITZ/releases/tag/build-v2.2.0
