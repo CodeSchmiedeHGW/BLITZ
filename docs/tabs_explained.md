@@ -281,10 +281,9 @@ Scrollable application logger (`LoggingTextEdit`).
 | **Min / Max** | Manual levels | Synced to histogram |
 | **Histogram LUT** | Interactive transfer function | pyqtgraph `HistogramLUTWidget` |
 | **Fit now / Keep fitting** | Auto levels | `calculate_lut_levels` — nanmin/max or percentile |
-| **RGB stacks** | Keep encoded range | Colour (e.g. EVT event-camera OFF=red / ON=green): Fit uses 0…1 (float) or 0…255 (uint8). No plasma/bipolar. Leave File-tab **Normalize** off. |
+| **RGB stacks** | Keep encoded range | Photos: uint8 0…255; float 0…1. Event-camera cubes from EVT are **grayscale** (uint16 counts / uint8 occupancy), not RGB. |
 | **Trim** | 0% / 1% / 2% / Custom | Percentile clip |
-| **Colormap + Auto** | Gradient selection | pyqtgraph Gradients |
-| **Log hist** | Log-scale histogram | — |
+| **Colormap + Auto + Log hist** | Gradient selection; log-scale histogram counts | Auto on grayscale: occupancy / sparse counts → **`event`**; signed → **bipolar**; else **plasma**. Preset `event` is black → blue → amber. |
 | **Load / Export LUT** | Wired in code | Currently **hidden** (`setVisible(False)`) |
 
 ---

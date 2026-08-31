@@ -29,10 +29,27 @@ archives: decode once, re-bin with live Δt / polarity / window, and push stacks
 to BLITZ over the **WOLKE** Socket.IO + HTTP `.npy` contract. Not embedded in
 the BLITZ Flatpak. A later live/multi-cam streamer (**FUNKE**) is backlog only.
 
-**Colour contract (CD polarity):** R = OFF counts, G = ON counts, B = 0,
-stretched with `log1p / p99(unfiltered window)` to float 0…1 (or uint8 ×255).
-Leave File-tab **Normalize** off. RGB histogram levels stay 0…1 (float) or
-0…255 (uint8) — no plasma/bipolar stretch on colour stacks.
+**Event cube:** the sidecar sends **one grayscale** `.npy` (`T, H, W`) — never
+RGB. Polarität color (OFF=red, ON=green, yellow=both) is only the Event reader
+preview. Default **counts** is `uint16` activity (`ON+OFF`); **occupancy** is
+`uint8` 0/255 (fired or not). Signed / ON-only / OFF-only are other gray views
+of the same planes. Leave File-tab **Normalize** off so counts stay physical.
+
+BLITZ **Auto** classifies that gray cube (no sidecar metadata) and picks the
+LUT. Occupancy and sparse counts share the **`event`** colormap (black → blue
+→ amber); occupancy pins 0…255 (or 0…1), counts pin 0…p99 of positive values.
+Signed stays **bipolar**. Everything else (float, dense photos) stays **plasma**.
+
+```mermaid
+flowchart TD
+  cube["Gray cube from EVT"]
+  cls{"classify_gray_lut"}
+  cube --> cls
+  cls -->|"uint8 unique in 0, 255 or 0, 1"| occ["event LUT, levels 0 to 255"]
+  cls -->|"uint16 or uint8 many rungs"| cnt["event LUT, levels 0 to p99 positives"]
+  cls -->|"min less than 0 less than max"| bip["bipolar, symmetric"]
+  cls -->|"float / photos / rest"| plas["plasma as today"]
+```
 
 ### DGM / GeoTIFF tiles (LGL)
 

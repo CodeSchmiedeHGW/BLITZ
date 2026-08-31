@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-08-31
+
+### Added
+
+- Colormap preset `event` (black → blue → amber) for event-camera occupancy and counts. LUT Auto classifies the gray cube: occupancy pins 0…255 (or 0…1), sparse integer counts pin 0…p99 of positives; signed stays bipolar.
+
+### Changed
+
+- RGB LUT for integer colour stacks: `uint16` uses 0…p99 of positive values instead of a hard 0…255. `uint8` photos stay 0…255; float rungs 0…1 still work. (Event-camera ingest from EVT is grayscale, not RGB.)
+- Log hist checkbox sits next to Auto in the colormap row (LUT dock).
+
 ## [2.2.1] - 2026-08-31
 
 ### Fixed
@@ -27,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - In-core File-tab test patterns.
 
-[Unreleased]: https://github.com/PiMaV/BLITZ/compare/build-v2.2.1...HEAD
+[Unreleased]: https://github.com/PiMaV/BLITZ/compare/build-v2.3.0...HEAD
+[2.3.0]: https://github.com/PiMaV/BLITZ/compare/build-v2.2.1...build-v2.3.0
 [2.2.1]: https://github.com/PiMaV/BLITZ/compare/build-v2.2.0...build-v2.2.1
 [2.2.0]: https://github.com/PiMaV/BLITZ/releases/tag/build-v2.2.0

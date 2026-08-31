@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (QAbstractSpinBox, QApplication, QButtonGroup,
 from pyqtgraph.dockarea import Dock, DockArea
 
 from .. import __version__, settings
+from .. import colormaps as _colormaps  # registers event gradient
 from .. import resources  # noqa: F401  (import registers Qt resources)
 from ..data.ops import ReduceOperation, reduce_display_name
 from .. import settings
@@ -377,11 +378,13 @@ class UI_MainWindow(QWidget):
         self.combobox_colormap = QComboBox()
         self.combobox_colormap.setMinimumWidth(100)
         self.combobox_colormap.setToolTip(
-            "Colormap preset. Right-click the color bar for more advanced features."
+            "Colormap preset. Auto picks plasma, bipolar, or event from the "
+            "data. Right-click the color bar for more advanced features."
         )
         # Common presets first, then the rest from pyqtgraph Gradients
+        _colormaps.ensure_registered()
         _cmap_preferred = (
-            "plasma", "bipolar", "greyclip", "grey", "viridis",
+            "plasma", "bipolar", "event", "greyclip", "grey", "viridis",
             "inferno", "magma", "turbo", "thermal", "flame",
         )
         from pyqtgraph.graphicsItems.GradientEditorItem import Gradients as _Grads
@@ -421,20 +424,15 @@ class UI_MainWindow(QWidget):
         lut_button_layout.addLayout(lut_fit_row)
         lut_button_layout.addWidget(self.label_lut_fit_status)
 
-        # Colormap: combo + Auto
+        # Colormap: combo + Auto + Log hist
         lut_cmap_row = QHBoxLayout()
         cmap_lbl = QLabel("Colormap")
         cmap_lbl.setStyleSheet("color: #aaa;")
         lut_cmap_row.addWidget(cmap_lbl)
         lut_cmap_row.addWidget(self.combobox_colormap, 1)
         lut_cmap_row.addWidget(self.checkbox_auto_colormap)
+        lut_cmap_row.addWidget(self.checkbox_lut_log)
         lut_button_layout.addLayout(lut_cmap_row)
-
-        # Options: Log hist
-        lut_opts_row = QHBoxLayout()
-        lut_opts_row.addWidget(self.checkbox_lut_log)
-        lut_opts_row.addStretch(1)
-        lut_button_layout.addLayout(lut_opts_row)
 
         lut_button_layout.addWidget(self.button_load_lut)
         lut_button_layout.addWidget(self.button_export_lut)

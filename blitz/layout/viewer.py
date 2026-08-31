@@ -13,7 +13,8 @@ from .. import settings
 from ..data.load import DataLoader, ImageData
 from ..theme import get_viewer_bg, get_timeline_curve_color, get_timeline_curve_colors_rgbw
 from ..data.ops import ReduceOperation
-from ..lut_levels import calculate_lut_levels
+from .. import colormaps as _colormaps
+from ..lut_levels import calculate_lut_levels, gray_auto_colormap, rgb_display_levels
 from ..tools import fit_text, format_pixel_value, log
 from .display_downsample import install_debounced_auto_downsample
 
@@ -66,6 +67,7 @@ class ImageViewer(pg.ImageView):
         self.ui.roiPlot.plotItem.showGrid(  # type: ignore
             x=True, y=True, alpha=0.6,
         )
+        _colormaps.ensure_registered()
         self.ui.histogram.gradient.loadPreset('plasma')
 
         self.mask: None | RectROI = None
@@ -787,13 +789,9 @@ class ImageViewer(pg.ImageView):
             self.data is not None
             and not self.data.is_greyscale()
         ):
-            # RGB (event-camera OFF=red / ON=green, or photos): keep the
-            # encoded range. EVT sends log1p 0…1; uint8 photos stay 0…255.
-            mx = float(np.nanmax(self.image)) if self.image.size else 1.0
-            if self.image.dtype == np.uint8 or mx > 1.0 + 1e-3:
-                min_, max_ = 0.0, 255.0
-            else:
-                min_, max_ = 0.0, 1.0
+            # RGB: uint8 photos/occupancy 0…255; float rungs 0…1;
+            # uint16 event counts 0…p99 of positive values (shared R/G ladder).
+            min_, max_ = rgb_display_levels(self.image)
             self.setLevels(min=min_, max=max_)
             self.ui.histogram.setHistogramRange(min_, max_)
             return
@@ -802,16 +800,22 @@ class ImageViewer(pg.ImageView):
             and self.data.is_greyscale()
             and self._auto_colormap
         ):
-            if min_ < 0 < max_:
-                r = max(abs(min_), max_)
-                min_, max_ = -r, r
-                self.ui.histogram.gradient.restoreState(Gradients['bipolar'])
-                self.ui.histogram.gradient.lastCM = 'bipolar'
-            else:
-                self.ui.histogram.gradient.restoreState(Gradients['plasma'])
-                self.ui.histogram.gradient.lastCM = 'plasma'
+            min_, max_ = self._apply_gray_auto_colormap(min_, max_)
         self.setLevels(min=min_, max=max_)
         self.ui.histogram.setHistogramRange(min_, max_)
+
+    def _apply_gray_auto_colormap(
+        self, min_: float, max_: float
+    ) -> tuple[float, float]:
+        """Pick event / bipolar / plasma from the cube; optional level pin."""
+        cmap, levels = gray_auto_colormap(self.image)
+        if levels is not None:
+            min_, max_ = levels
+        if cmap not in Gradients:
+            cmap = "plasma"
+        self.ui.histogram.gradient.restoreState(Gradients[cmap])
+        self.ui.histogram.gradient.lastCM = cmap
+        return min_, max_
 
     def auto_colormap(self) -> None:
         min_, max_ = self._calculate_levels(self.image)
@@ -819,14 +823,7 @@ class ImageViewer(pg.ImageView):
             min_ = -1.0
         if not np.isfinite(max_) or max_ <= min_:
             max_ = min_ + 1.0
-        if min_ < 0 < max_:
-            r = max(abs(min_), max_)
-            min_, max_ = -r, r
-            self.ui.histogram.gradient.restoreState(Gradients['bipolar'])
-            self.ui.histogram.gradient.lastCM = 'bipolar'
-        else:
-            self.ui.histogram.gradient.restoreState(Gradients['plasma'])
-            self.ui.histogram.gradient.lastCM = 'plasma'
+        min_, max_ = self._apply_gray_auto_colormap(min_, max_)
         self.setLevels(min=min_, max=max_)
         self.ui.histogram.setHistogramRange(min_, max_)
 

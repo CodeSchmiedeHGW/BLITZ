@@ -892,7 +892,9 @@ class MainWindow(QMainWindow):
         self.ui.image_viewer.ui.histogram.gradient.lastCM = (
             settings.get("default/colormap")
         )
-        if settings.get("default/colormap") not in ("greyclip", "plasma", "bipolar"):
+        if settings.get("default/colormap") not in (
+            "greyclip", "plasma", "bipolar", "event",
+        ):
             self.ui.checkbox_auto_colormap.setChecked(False)
         self._sync_colormap_combo(settings.get("default/colormap"))
         self.ui.image_viewer.ui.histogram.gradient.sigGradientChangeFinished.connect(
